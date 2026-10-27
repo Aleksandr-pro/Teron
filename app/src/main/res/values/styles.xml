@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="TeronTheme" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/teron_bg_dark</item>
+        <item name="android:statusBarColor">@color/teron_bg_dark</item>
+        <item name="android:navigationBarColor">@color/teron_bg_dark</item>
+        <item name="android:colorPrimary">@color/teron_accent_indigo</item>
+        <item name="android:colorAccent">@color/teron_accent_cyan</item>
+    </style>
+</resources>
