@@ -7,7 +7,7 @@ import android.database.sqlite.SQLiteOpenHelper
 import app.teron.superapp.R
 import app.teron.superapp.crypto.Secp256k1Wallet
 
-class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superapp.db", null, 2) {
+class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superapp.db", null, 3) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -18,6 +18,7 @@ class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superap
                 display_name TEXT NOT NULL,
                 handle TEXT NOT NULL,
                 bio TEXT NOT NULL,
+                phone_number TEXT NOT NULL DEFAULT '',
                 avatar_color INTEGER NOT NULL,
                 avatar_glyph TEXT NOT NULL,
                 public_key TEXT NOT NULL,
@@ -40,12 +41,16 @@ class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superap
                 node_id TEXT PRIMARY KEY,
                 display_name TEXT NOT NULL,
                 handle TEXT NOT NULL,
+                bio TEXT NOT NULL DEFAULT '',
                 public_key TEXT NOT NULL,
                 avatar_color INTEGER NOT NULL,
-                added_at INTEGER NOT NULL
+                added_at INTEGER NOT NULL,
+                last_seen_ms INTEGER NOT NULL DEFAULT 0
             )
             """.trimIndent()
         )
+
+        createPhoneBookCacheTable(db)
 
         db.execSQL(
             """
@@ -176,6 +181,22 @@ class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superap
         )
     }
 
+    private fun createPhoneBookCacheTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS phone_book_cache (
+                canonical_phone TEXT PRIMARY KEY,
+                raw_phone TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                phone_hash TEXT NOT NULL,
+                matched_node_id TEXT NOT NULL DEFAULT '',
+                matched_handle TEXT NOT NULL DEFAULT '',
+                synced_at INTEGER NOT NULL DEFAULT 0
+            )
+            """.trimIndent()
+        )
+    }
+
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) {
             try { db.execSQL("ALTER TABLE profile ADD COLUMN btc_address TEXT NOT NULL DEFAULT ''") } catch (_: Throwable) {}
@@ -215,6 +236,12 @@ class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superap
                     db.update("profile", cv, "id = 1", null)
                 }
             }
+        }
+        if (oldVersion < 3) {
+            try { db.execSQL("ALTER TABLE profile ADD COLUMN phone_number TEXT NOT NULL DEFAULT ''") } catch (_: Throwable) {}
+            try { db.execSQL("ALTER TABLE contacts ADD COLUMN bio TEXT NOT NULL DEFAULT ''") } catch (_: Throwable) {}
+            try { db.execSQL("ALTER TABLE contacts ADD COLUMN last_seen_ms INTEGER NOT NULL DEFAULT 0") } catch (_: Throwable) {}
+            createPhoneBookCacheTable(db)
         }
     }
 
@@ -272,11 +299,13 @@ class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superap
             if (c.moveToFirst()) {
                 val rawName = c.getString(c.getColumnIndexOrThrow("display_name"))
                 val nodeId = c.getString(c.getColumnIndexOrThrow("node_id"))
+                val phoneIdx = c.getColumnIndex("phone_number")
                 return UserProfile(
                     nodeId = nodeId,
                     displayName = rawName.ifBlank { nodeId },
                     handle = c.getString(c.getColumnIndexOrThrow("handle")),
                     bio = c.getString(c.getColumnIndexOrThrow("bio")),
+                    phoneNumber = if (phoneIdx >= 0) c.getString(phoneIdx).orEmpty() else "",
                     avatarColor = c.getInt(c.getColumnIndexOrThrow("avatar_color")),
                     avatarGlyph = c.getString(c.getColumnIndexOrThrow("avatar_glyph")).ifBlank { Theme.initialsFor(rawName.ifBlank { nodeId }) },
                     publicKeyB64 = c.getString(c.getColumnIndexOrThrow("public_key")),
@@ -304,13 +333,13 @@ class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superap
         displayName: String,
         handleInput: String,
         bio: String,
-        mnemonicOrNull: String?
+        mnemonicOrNull: String?,
+        phoneNumber: String = ""
     ) {
         val cur = getProfile()
         val id = if (!mnemonicOrNull.isNullOrBlank() && Secp256k1Wallet.validateMnemonic(mnemonicOrNull)) {
             TeronCrypto.generateIdentity(mnemonicOrNull)
         } else {
-            // Keep pre-generated BIP-39 mnemonic shown during onboarding if matches, else generate fresh
             if (!mnemonicOrNull.isNullOrBlank()) TeronCrypto.generateIdentity(mnemonicOrNull)
             else TeronCrypto.generateIdentity(cur.seedPhrase)
         }
@@ -333,6 +362,7 @@ class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superap
                 put("display_name", cleanName)
                 put("handle", normalizedHandle)
                 put("bio", bio.trim())
+                put("phone_number", phoneNumber.trim())
                 put("avatar_color", color)
                 put("avatar_glyph", initials)
                 put("public_key", id.publicKeyB64)
@@ -344,7 +374,6 @@ class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superap
                 put("onboarded", 1)
             }, "id = 1", null)
 
-            // Reset cached wallet balances if seed changed
             if (id.walletAddress != cur.walletAddress) {
                 db.update("wallet_balances", ContentValues().apply { put("balance", 0.0) }, null, null)
                 db.delete("wallet_txs", null, null)
@@ -387,7 +416,8 @@ class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superap
         avatarGlyph: String,
         maxRelayHops: Int,
         darkTheme: Boolean,
-        backgroundDaemon: Boolean
+        backgroundDaemon: Boolean,
+        phoneNumber: String = getProfile().phoneNumber
     ) {
         val cur = getProfile()
         val cleanName = displayName.trim().ifBlank { cur.displayName }
@@ -402,6 +432,7 @@ class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superap
             put("display_name", cleanName)
             put("handle", cleanHandle)
             put("bio", bio.trim())
+            put("phone_number", phoneNumber.trim())
             put("avatar_color", avatarColor)
             put("avatar_glyph", avatarGlyph.trim().take(2).uppercase().ifBlank { Theme.initialsFor(cleanName) })
             put("max_relay_hops", maxRelayHops.coerceIn(1, 6))
@@ -411,18 +442,60 @@ class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superap
         }, "id = 1", null)
     }
 
-    // --- Contacts ---
-    fun upsertContact(nodeId: String, displayName: String, handle: String, publicKeyB64: String, avatarColor: Int = Theme.brand) {
+    fun updateCanonicalHandle(handle: String) {
+        if (handle.isBlank()) return
+        writableDatabase.update("profile", ContentValues().apply {
+            put("handle", handle.trim().lowercase())
+        }, "id = 1", null)
+    }
+
+    // --- Contacts & Phone Book Sync ---
+    fun upsertContact(
+        nodeId: String,
+        displayName: String,
+        handle: String,
+        publicKeyB64: String,
+        avatarColor: Int = Theme.brand,
+        bio: String = "",
+        lastSeenMs: Long = 0L
+    ) {
         val cleanId = nodeId.trim()
         if (cleanId.isBlank() || cleanId == getProfile().nodeId) return
+        val existingPk = getContactPublicKey(cleanId).orEmpty()
+        var existingName = ""
+        var existingHandle = ""
+        var existingBio = ""
+        var existingAddedAt = System.currentTimeMillis()
+        readableDatabase.rawQuery(
+            "SELECT display_name, handle, bio, added_at FROM contacts WHERE node_id = ?",
+            arrayOf(cleanId)
+        ).use { c ->
+            if (c.moveToFirst()) {
+                existingName = c.getString(0).orEmpty()
+                existingHandle = c.getString(1).orEmpty()
+                existingBio = c.getString(2).orEmpty()
+                existingAddedAt = c.getLong(3)
+            }
+        }
+
+        val finalName = displayName.trim().let {
+            if (it.isBlank() || (it == cleanId && existingName.isNotBlank() && existingName != cleanId)) existingName.ifBlank { cleanId }
+            else it
+        }
+        val finalHandle = handle.trim().ifBlank { existingHandle.ifBlank { "${cleanId.lowercase()}@teron.mesh" } }
+        val finalPk = publicKeyB64.trim().ifBlank { existingPk }
+        val finalBio = bio.trim().ifBlank { existingBio }
         val color = Theme.avatarPalette[(cleanId.hashCode() and 0x7FFFFFFF) % Theme.avatarPalette.size]
+
         writableDatabase.insertWithOnConflict("contacts", null, ContentValues().apply {
             put("node_id", cleanId)
-            put("display_name", displayName.trim().ifBlank { cleanId })
-            put("handle", handle.trim().ifBlank { "${cleanId.lowercase()}@teron.mesh" })
-            put("public_key", publicKeyB64)
+            put("display_name", finalName)
+            put("handle", finalHandle)
+            put("bio", finalBio)
+            put("public_key", finalPk)
             put("avatar_color", if (avatarColor == Theme.brand) color else avatarColor)
-            put("added_at", System.currentTimeMillis())
+            put("added_at", existingAddedAt)
+            put("last_seen_ms", if (lastSeenMs > 0L) lastSeenMs else System.currentTimeMillis())
         }, SQLiteDatabase.CONFLICT_REPLACE)
     }
 
@@ -430,29 +503,144 @@ class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superap
         writableDatabase.delete("contacts", "node_id = ?", arrayOf(nodeId))
     }
 
-    fun getContacts(): List<MeshPeer> {
+    fun getContacts(searchQuery: String = ""): List<MeshPeer> {
         val list = mutableListOf<MeshPeer>()
-        readableDatabase.rawQuery("SELECT * FROM contacts ORDER BY display_name ASC", null).use { c ->
+        val q = searchQuery.trim().lowercase().removePrefix("@")
+        readableDatabase.rawQuery("SELECT * FROM contacts ORDER BY display_name COLLATE NOCASE ASC", null).use { c ->
             while (c.moveToNext()) {
-                list.add(
-                    MeshPeer(
-                        nodeId = c.getString(c.getColumnIndexOrThrow("node_id")),
-                        displayName = c.getString(c.getColumnIndexOrThrow("display_name")),
-                        handle = c.getString(c.getColumnIndexOrThrow("handle")),
-                        publicKeyB64 = c.getString(c.getColumnIndexOrThrow("public_key")),
-                        transport = "Доверенный контакт",
-                        rssi = 0,
-                        distanceMeters = 0.0,
-                        hops = 1,
-                        ipAddress = null,
-                        bleAddress = null,
-                        lastSeenMs = c.getLong(c.getColumnIndexOrThrow("added_at")),
-                        isTrustedContact = true
+                val nid = c.getString(c.getColumnIndexOrThrow("node_id"))
+                val name = c.getString(c.getColumnIndexOrThrow("display_name"))
+                val hnd = c.getString(c.getColumnIndexOrThrow("handle"))
+                val pk = c.getString(c.getColumnIndexOrThrow("public_key"))
+                val seenIdx = c.getColumnIndex("last_seen_ms")
+                val seen = if (seenIdx >= 0) c.getLong(seenIdx) else 0L
+                if (q.isEmpty() ||
+                    nid.lowercase().contains(q) ||
+                    name.lowercase().contains(q) ||
+                    hnd.lowercase().contains(q)
+                ) {
+                    list.add(
+                        MeshPeer(
+                            nodeId = nid,
+                            displayName = name,
+                            handle = hnd,
+                            publicKeyB64 = pk,
+                            transport = if (pk.isNotBlank()) "В Teron • E2EE" else "Ожидает ключ",
+                            rssi = 0,
+                            distanceMeters = 0.0,
+                            hops = 1,
+                            ipAddress = null,
+                            bleAddress = null,
+                            lastSeenMs = if (seen > 0L) seen else c.getLong(c.getColumnIndexOrThrow("added_at")),
+                            isTrustedContact = true
+                        )
                     )
-                )
+                }
             }
         }
         return list
+    }
+
+    fun savePhoneBookEntries(entries: List<PhoneBookEntry>) {
+        val db = writableDatabase
+        val now = System.currentTimeMillis()
+        // Keep existing matched_node_id / matched_handle across refreshes
+        val prevMatches = mutableMapOf<String, Pair<String, String>>()
+        db.rawQuery("SELECT canonical_phone, matched_node_id, matched_handle FROM phone_book_cache WHERE matched_node_id <> ''", null).use { c ->
+            while (c.moveToNext()) {
+                prevMatches[c.getString(0)] = c.getString(1) to c.getString(2)
+            }
+        }
+
+        db.beginTransaction()
+        try {
+            db.delete("phone_book_cache", null, null)
+            for (e in entries) {
+                val prev = prevMatches[e.canonicalPhone]
+                db.insertWithOnConflict("phone_book_cache", null, ContentValues().apply {
+                    put("canonical_phone", e.canonicalPhone)
+                    put("raw_phone", e.rawPhone)
+                    put("display_name", e.displayName)
+                    put("phone_hash", e.phoneHash)
+                    put("matched_node_id", e.matchedNodeId.ifBlank { prev?.first.orEmpty() })
+                    put("matched_handle", e.matchedHandle.ifBlank { prev?.second.orEmpty() })
+                    put("synced_at", now)
+                }, SQLiteDatabase.CONFLICT_REPLACE)
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    fun applyPhoneHashMatches(matchesByHash: Map<String, DirectoryUser>): Int {
+        if (matchesByHash.isEmpty()) return 0
+        var matchedCount = 0
+        val entries = getAllPhoneBookEntries()
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            for (entry in entries) {
+                val matched = matchesByHash[entry.phoneHash] ?: continue
+                matchedCount++
+                db.update(
+                    "phone_book_cache",
+                    ContentValues().apply {
+                        put("matched_node_id", matched.nodeId)
+                        put("matched_handle", matched.handle)
+                    },
+                    "canonical_phone = ?",
+                    arrayOf(entry.canonicalPhone)
+                )
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+
+        for (entry in entries) {
+            val matched = matchesByHash[entry.phoneHash] ?: continue
+            val preferredName = entry.displayName.ifBlank { matched.displayName }
+            upsertContact(
+                nodeId = matched.nodeId,
+                displayName = preferredName,
+                handle = matched.handle,
+                publicKeyB64 = matched.publicKeyB64,
+                avatarColor = matched.avatarColor,
+                bio = matched.bio,
+                lastSeenMs = matched.lastSeenEpochMs
+            )
+        }
+        return matchedCount
+    }
+
+    fun getAllPhoneBookEntries(searchQuery: String = ""): List<PhoneBookEntry> {
+        val out = mutableListOf<PhoneBookEntry>()
+        val q = searchQuery.trim().lowercase()
+        readableDatabase.rawQuery(
+            "SELECT * FROM phone_book_cache ORDER BY CASE WHEN matched_node_id <> '' THEN 0 ELSE 1 END, display_name COLLATE NOCASE ASC",
+            null
+        ).use { c ->
+            while (c.moveToNext()) {
+                val entry = PhoneBookEntry(
+                    canonicalPhone = c.getString(c.getColumnIndexOrThrow("canonical_phone")),
+                    rawPhone = c.getString(c.getColumnIndexOrThrow("raw_phone")),
+                    displayName = c.getString(c.getColumnIndexOrThrow("display_name")),
+                    phoneHash = c.getString(c.getColumnIndexOrThrow("phone_hash")),
+                    matchedNodeId = c.getString(c.getColumnIndexOrThrow("matched_node_id")),
+                    matchedHandle = c.getString(c.getColumnIndexOrThrow("matched_handle"))
+                )
+                if (q.isEmpty() ||
+                    entry.displayName.lowercase().contains(q) ||
+                    entry.rawPhone.lowercase().contains(q) ||
+                    entry.canonicalPhone.contains(q) ||
+                    entry.matchedHandle.lowercase().contains(q)
+                ) {
+                    out.add(entry)
+                }
+            }
+        }
+        return out
     }
 
     fun getContactPublicKey(nodeId: String): String? {
@@ -558,7 +746,7 @@ class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superap
         }
     }
 
-    fun getConversations(livePeers: Map<String, MeshPeer>): List<ChatConversationSummary> {
+    fun getConversations(livePeers: Map<String, MeshPeer>, searchQuery: String = ""): List<ChatConversationSummary> {
         val result = mutableListOf<ChatConversationSummary>()
         val contactsMap = getContacts().associateBy { it.nodeId }
 
@@ -678,7 +866,14 @@ class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superap
             )
         )
 
-        return result
+        val q = searchQuery.trim().lowercase().removePrefix("@")
+        if (q.isEmpty()) return result
+        return result.filter {
+            it.title.lowercase().contains(q) ||
+                it.conversationId.lowercase().contains(q) ||
+                it.subtitle.lowercase().contains(q) ||
+                it.lastMessage.lowercase().contains(q)
+        }
     }
 
     // --- AirMesh Store & Forward Queue ---

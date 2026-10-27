@@ -5,6 +5,7 @@ data class UserProfile(
     val displayName: String,
     val handle: String,
     val bio: String,
+    val phoneNumber: String = "",
     val avatarColor: Int,
     val avatarGlyph: String,
     val publicKeyB64: String,
@@ -16,6 +17,29 @@ data class UserProfile(
     val maxRelayHops: Int = 4,
     val darkTheme: Boolean = true,
     val backgroundDaemon: Boolean = false
+)
+
+data class DirectoryUser(
+    val nodeId: String,
+    val displayName: String,
+    val handle: String,
+    val bio: String,
+    val publicKeyB64: String,
+    val avatarColor: Int,
+    val btcAddress: String = "",
+    val ethAddress: String = "",
+    val trxAddress: String = "",
+    val lastSeenEpochMs: Long = 0L,
+    val matchedPhoneName: String = ""
+)
+
+data class PhoneBookEntry(
+    val canonicalPhone: String,
+    val rawPhone: String,
+    val displayName: String,
+    val phoneHash: String,
+    val matchedNodeId: String = "",
+    val matchedHandle: String = ""
 )
 
 data class MeshPeer(

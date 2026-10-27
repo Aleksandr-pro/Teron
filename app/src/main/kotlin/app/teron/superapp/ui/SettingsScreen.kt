@@ -7,6 +7,7 @@ import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Build
+import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -90,7 +91,8 @@ class SettingsScreen(
             setPadding(0, Theme.dp(ctx, 2), 0, Theme.dp(ctx, 2))
         })
         pInfo.addView(TextView(ctx).apply {
-            text = me.bio.ifBlank { "Нажмите для редактирования профиля" }
+            val phoneNote = if (me.phoneNumber.isNotBlank()) "Телефон привязан (${me.phoneNumber})" else "Привяжите номер телефона для поиска друзьями"
+            text = me.bio.ifBlank { phoneNote }
             setTextColor(Theme.textSecondary)
             textSize = 12f
             maxLines = 1
@@ -134,8 +136,38 @@ class SettingsScreen(
         col.addView(secGroup)
 
         // SECTION 2: Network & Mail
-        col.addView(Components.sectionHeader(ctx, "Сеть AirMesh и Почта"))
+        col.addView(Components.sectionHeader(ctx, "Сеть Teron, Контакты и Почта"))
         val netGroup = groupCard()
+        val syncSummary = when {
+            app.cloudSync.isOnlineConnected && me.phoneNumber.isNotBlank() ->
+                "Глобальный каталог онлайн • SHA-256 номера активен"
+            app.cloudSync.isOnlineConnected ->
+                "Каталог онлайн • нажмите, чтобы привязать телефон или обновить"
+            else ->
+                "Автономный режим AirMesh • нажмите для синхронизации с сетью"
+        }
+        netGroup.addView(settingRow(
+            iconRes = R.drawable.ic_cloud_sync,
+            iconColor = if (app.cloudSync.isOnlineConnected) Theme.accentEmerald else Theme.brandText,
+            title = "Каталог пользователей и контактов Teron",
+            subtitle = syncSummary,
+            onClick = {
+                if (me.phoneNumber.isBlank()) {
+                    showEditProfileSheet()
+                } else {
+                    Toast.makeText(ctx, "Синхронизация профиля и контактов...", Toast.LENGTH_SHORT).show()
+                    app.cloudSync.syncOwnProfileAsync { ok, err ->
+                        if (ok) {
+                            Toast.makeText(ctx, "Профиль синхронизирован с глобальной сетью Teron", Toast.LENGTH_SHORT).show()
+                            render()
+                        } else {
+                            Toast.makeText(ctx, err, Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+            }
+        ))
+        netGroup.addView(Components.divider(ctx, 58))
         val localIp = app.meshEngine.getLocalIpv4()
         netGroup.addView(settingRow(
             iconRes = R.drawable.ic_mesh,
@@ -278,7 +310,7 @@ class SettingsScreen(
         col.addView(sysGroup)
 
         col.addView(TextView(ctx).apply {
-            text = "Teron v2.0.0 • Native Kotlin • Non-Custodial BIP-39 & AirMesh"
+            text = "Teron v2.1.0 • Native Kotlin • Global E2EE + AirMesh + BIP-39"
             setTextColor(Theme.textMuted)
             textSize = 11.5f
             gravity = Gravity.CENTER
@@ -337,14 +369,22 @@ class SettingsScreen(
     private fun showEditProfileSheet() {
         val me = app.db.getProfile()
         var chosenColor = me.avatarColor
-        TeronSheets.showBottomSheet(ctx, "Редактирование профиля", "Имя, адрес @teron.mesh и цвет монограммы") { dlg, col ->
+        TeronSheets.showBottomSheet(ctx, "Редактирование профиля", "Имя, @ник, телефон для синхронизации и цвет") { dlg, col ->
             val nameField = Components.labeledInput(ctx, "Отображаемое имя", "Ваше имя", me.displayName)
             val handlePrefix = me.handle.substringBefore("@")
             val handleField = Components.labeledInput(ctx, "Логин в сети Teron", "username", handlePrefix)
+            val phoneField = Components.labeledInput(
+                ctx = ctx,
+                label = "Номер телефона (SHA-256 для поиска друзьями)",
+                hintText = "+7 777 000 00 00",
+                initialValue = me.phoneNumber,
+                inputType = InputType.TYPE_CLASS_PHONE
+            )
             val bioField = Components.labeledInput(ctx, "О себе / статус", "Краткая подпись", me.bio)
 
             col.addView(nameField.container)
             col.addView(handleField.container)
+            col.addView(phoneField.container)
             col.addView(bioField.container)
 
             val paletteRow = LinearLayout(ctx).apply {
@@ -365,16 +405,23 @@ class SettingsScreen(
             }
             col.addView(paletteRow)
 
-            col.addView(Components.primaryButton(ctx, "Сохранить изменения", R.drawable.ic_check) {
+            col.addView(Components.primaryButton(ctx, "Сохранить и синхронизировать", R.drawable.ic_check) {
                 val n = nameField.input.text.toString().trim().ifBlank { me.displayName }
                 val cleanH = handleField.input.text.toString().trim().lowercase(Locale.ROOT)
                     .replace(Regex("[^a-z0-9._-]"), "").ifBlank { "user" }
+                val ph = phoneField.input.text.toString().trim()
                 val b = bioField.input.text.toString().trim()
                 val mono = Theme.initialsFor(n)
                 app.db.updateProfile(
                     n, "$cleanH@teron.mesh", b, chosenColor, mono,
-                    me.maxRelayHops, me.darkTheme, me.backgroundDaemon
+                    me.maxRelayHops, me.darkTheme, me.backgroundDaemon, ph
                 )
+                app.cloudSync.syncOwnProfileAsync { ok, _ ->
+                    if (ok) {
+                        Toast.makeText(ctx, "Профиль синхронизирован в глобальном каталоге Teron", Toast.LENGTH_SHORT).show()
+                    }
+                    render()
+                }
                 dlg.dismiss()
                 render()
             })

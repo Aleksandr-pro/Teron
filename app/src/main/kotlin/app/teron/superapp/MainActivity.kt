@@ -10,7 +10,6 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.provider.ContactsContract
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -25,6 +24,7 @@ import app.teron.superapp.core.Theme
 import app.teron.superapp.mesh.TeronMeshEngine
 import app.teron.superapp.suncode.SunCodeCodec
 import app.teron.superapp.suncode.SunCodeDialog
+import app.teron.superapp.sync.TeronCloudSync
 import app.teron.superapp.ui.Components
 import app.teron.superapp.ui.EcosystemScreen
 import app.teron.superapp.ui.HomeHubScreen
@@ -33,11 +33,10 @@ import app.teron.superapp.ui.MessengerScreen
 import app.teron.superapp.ui.MusicScreen
 import app.teron.superapp.ui.OnboardingScreen
 import app.teron.superapp.wallet.TeronWalletEngine
-import java.security.MessageDigest
-import java.util.Locale
 
 class MainActivity : Activity(),
     TeronMeshEngine.Listener,
+    TeronCloudSync.Listener,
     TeronAudioEngine.Listener,
     TeronWalletEngine.Listener {
 
@@ -45,10 +44,10 @@ class MainActivity : Activity(),
         private const val REQ_PERMS_BLE = 301
         private const val REQ_PERMS_CAM = 302
         private const val REQ_PERMS_AUDIO = 303
+        private const val REQ_PERMS_CONTACTS = 304
 
-        private const val REQ_PICK_SUNCODE_PNG = 401
+        private const val REQ_PICK_SUNCODE_IMAGE = 401
         private const val REQ_PICK_AUDIO_FILE = 402
-        private const val REQ_PICK_PHONE_CONTACT = 403
     }
 
     private lateinit var app: TeronApp
@@ -97,6 +96,7 @@ class MainActivity : Activity(),
             ctx = this,
             app = app,
             onRequestBlePermissions = { requestBlePermissions() },
+            onRequestContactsPermissionAndSync = { requestContactsPermissionAndSync() },
             onOpenSunCode = { scan -> openSunCodeModal(scan) }
         )
         mailScreen = MailScreen(this, app)
@@ -402,7 +402,10 @@ class MainActivity : Activity(),
             onRequestCameraPermission = {
                 requestPermissions(arrayOf(Manifest.permission.CAMERA), REQ_PERMS_CAM)
             },
-            onRequestPhoneContactPicker = { openPhoneContactPicker() },
+            onRequestPhoneContactPicker = {
+                switchTab(1, "contacts")
+                requestContactsPermissionAndSync()
+            },
             onContactAdded = { contact ->
                 switchTab(1, contact.nodeId)
             }
@@ -411,13 +414,40 @@ class MainActivity : Activity(),
         if (scanTab) dlg.switchTab(1)
     }
 
-    private fun openPhoneContactPicker() {
-        try {
-            val intent = Intent(Intent.ACTION_PICK, ContactsContract.CommonDataKinds.Phone.CONTENT_URI)
-            @Suppress("DEPRECATION")
-            startActivityForResult(intent, REQ_PICK_PHONE_CONTACT)
-        } catch (e: Exception) {
-            Toast.makeText(this, "Не удалось открыть телефонную книгу: ${e.message}", Toast.LENGTH_SHORT).show()
+    private fun requestContactsPermissionAndSync() {
+        if (checkSelfPermission(Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED) {
+            runFullPhoneBookSync()
+        } else {
+            requestPermissions(arrayOf(Manifest.permission.READ_CONTACTS), REQ_PERMS_CONTACTS)
+        }
+    }
+
+    private fun runFullPhoneBookSync() {
+        Toast.makeText(this, "Синхронизация телефонной книги с сетью Teron...", Toast.LENGTH_SHORT).show()
+        app.cloudSync.syncOwnProfileAsync()
+        app.cloudSync.syncPhoneBookContactsAsync { ok, matchedCount, totalScanned, msg ->
+            if (currentTab == 1) {
+                messengerScreen.refreshDynamicData()
+            }
+            when {
+                matchedCount > 0 -> {
+                    Toast.makeText(
+                        this,
+                        "Найдено контактов с Teron: $matchedCount (проверено номеров: $totalScanned)",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+                ok -> {
+                    Toast.makeText(
+                        this,
+                        "Проверено контактов: $totalScanned. Номера сохранены для автопоиска и приглашений.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+                else -> {
+                    Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+                }
+            }
         }
     }
 
@@ -428,7 +458,7 @@ class MainActivity : Activity(),
                 type = "image/*"
             }
             @Suppress("DEPRECATION")
-            startActivityForResult(intent, REQ_PICK_SUNCODE_PNG)
+            startActivityForResult(intent, REQ_PICK_SUNCODE_IMAGE)
         } catch (e: Exception) {
             Toast.makeText(this, "Не удалось открыть галерею: ${e.message}", Toast.LENGTH_SHORT).show()
         }
@@ -482,10 +512,11 @@ class MainActivity : Activity(),
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (!app.db.isOnboarded()) return
+        val granted = grantResults.isNotEmpty() && grantResults.any { it == PackageManager.PERMISSION_GRANTED }
         when (requestCode) {
             REQ_PERMS_BLE -> {
                 app.meshEngine.refreshBleTransport()
-                if (currentTab == 1) messengerScreen.render()
+                if (currentTab == 1) messengerScreen.refreshDynamicData()
                 if (currentTab == 0) switchTab(0, null)
             }
             REQ_PERMS_CAM -> {
@@ -494,6 +525,13 @@ class MainActivity : Activity(),
             REQ_PERMS_AUDIO -> {
                 app.audioEngine.reloadLibrary()
                 if (currentTab == 3) musicScreen.render()
+            }
+            REQ_PERMS_CONTACTS -> {
+                if (granted) {
+                    runFullPhoneBookSync()
+                } else {
+                    Toast.makeText(this, "Разрешение к контактам отклонено — доступен поиск по @нику и номеру вручную", Toast.LENGTH_LONG).show()
+                }
             }
         }
     }
@@ -506,16 +544,24 @@ class MainActivity : Activity(),
         val uri = data?.data ?: return
 
         when (requestCode) {
-            REQ_PICK_SUNCODE_PNG -> {
+            REQ_PICK_SUNCODE_IMAGE -> {
                 try {
                     val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return
-                    val decoded = SunCodeCodec.extractUriFromPngBytes(bytes)
+                    val decoded = SunCodeCodec.extractContactFromImageBytes(bytes)
                     if (decoded != null) {
                         app.db.upsertContact(decoded.nodeId, decoded.displayName, decoded.handle, decoded.publicKeyB64)
-                        Toast.makeText(this, "Контакт ${decoded.displayName} импортирован из SunCode", Toast.LENGTH_LONG).show()
+                        if (decoded.publicKeyB64.isBlank()) {
+                            app.cloudSync.resolveNodeAsync(decoded.nodeId) { resolved ->
+                                if (resolved != null) {
+                                    Toast.makeText(this, "Контакт ${resolved.displayName} импортирован и синхронизирован", Toast.LENGTH_LONG).show()
+                                    switchTab(1, resolved.nodeId)
+                                }
+                            }
+                        }
+                        Toast.makeText(this, "Контакт ${decoded.displayName} импортирован из изображения", Toast.LENGTH_LONG).show()
                         switchTab(1, decoded.nodeId)
                     } else {
-                        Toast.makeText(this, "В выбранном изображении нет метки Teron SunCode", Toast.LENGTH_LONG).show()
+                        Toast.makeText(this, "На изображении не найдена карточка или матрица Teron SunCode", Toast.LENGTH_LONG).show()
                     }
                 } catch (e: Exception) {
                     Toast.makeText(this, "Ошибка чтения файла: ${e.message}", Toast.LENGTH_SHORT).show()
@@ -527,31 +573,6 @@ class MainActivity : Activity(),
                 } catch (_: Exception) {}
                 app.audioEngine.addPickedDocumentUri(uri)
                 if (currentTab == 3) musicScreen.render()
-            }
-            REQ_PICK_PHONE_CONTACT -> {
-                try {
-                    val proj = arrayOf(
-                        ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
-                        ContactsContract.CommonDataKinds.Phone.NUMBER
-                    )
-                    contentResolver.query(uri, proj, null, null, null)?.use { c ->
-                        if (c.moveToFirst()) {
-                            val name = c.getString(0)?.trim().orEmpty().ifBlank { "Контакт" }
-                            val phone = c.getString(1)?.trim().orEmpty()
-                            val cleanDigits = phone.replace(Regex("[^0-9+]"), "")
-                            val hash = MessageDigest.getInstance("SHA-256")
-                                .digest(cleanDigits.ifEmpty { name }.toByteArray(Charsets.UTF_8))
-                            val tag = hash.take(3).joinToString("") { "%02X".format(it) }
-                            val nodeId = "TRN-$tag"
-                            val handle = "${cleanDigits.trimStart('+').ifEmpty { tag.lowercase(Locale.US) }}@teron.mesh"
-                            app.db.upsertContact(nodeId, name, handle, "")
-                            Toast.makeText(this, "Импортирован контакт: $name ($phone)", Toast.LENGTH_LONG).show()
-                            switchTab(1, nodeId)
-                        }
-                    }
-                } catch (e: Exception) {
-                    Toast.makeText(this, "Ошибка чтения контакта: ${e.message}", Toast.LENGTH_SHORT).show()
-                }
             }
         }
     }
@@ -580,8 +601,12 @@ class MainActivity : Activity(),
         super.onResume()
         if (::app.isInitialized && app.startupError == null) {
             app.meshEngine.addListener(this)
+            app.cloudSync.addListener(this)
             app.audioEngine.addListener(this)
             app.walletEngine.addListener(this)
+            if (app.db.isOnboarded()) {
+                app.cloudSync.syncOwnProfileAsync()
+            }
             uiTickHandler.post(playbackTickRunnable)
         }
     }
@@ -590,6 +615,7 @@ class MainActivity : Activity(),
         uiTickHandler.removeCallbacks(playbackTickRunnable)
         if (::app.isInitialized && app.startupError == null) {
             app.meshEngine.removeListener(this)
+            app.cloudSync.removeListener(this)
             app.audioEngine.removeListener(this)
             app.walletEngine.removeListener(this)
         }
@@ -600,15 +626,25 @@ class MainActivity : Activity(),
         if (!app.db.isOnboarded()) return
         when (currentTab) {
             0 -> switchTab(0, null)
-            1 -> messengerScreen.render()
+            1 -> messengerScreen.refreshDynamicData()
             2 -> mailScreen.render()
             4 -> if (ecosystemScreen.activeSubApp == 0) ecosystemScreen.render()
         }
         refreshBottomNav()
     }
 
+    override fun onCloudStateChanged() {
+        if (!app.db.isOnboarded()) return
+        when (currentTab) {
+            0 -> switchTab(0, null)
+            1 -> messengerScreen.refreshDynamicData()
+            4 -> if (ecosystemScreen.activeSubApp == 4) ecosystemScreen.render()
+        }
+        refreshBottomNav()
+    }
+
     override fun onPacketDelivered(summary: String) {
-        Toast.makeText(this, "AirMesh: $summary", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, "Teron: $summary", Toast.LENGTH_LONG).show()
     }
 
     override fun onAudioStateChanged() {

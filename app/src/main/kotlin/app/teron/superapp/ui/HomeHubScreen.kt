@@ -203,8 +203,8 @@ object HomeHubScreen {
         }
         statusStrip.addView(Components.pillBadge(
             ctx,
-            if (app.meshEngine.isWifiMeshActive) "Wi-Fi LAN активен" else "Wi-Fi ожидание",
-            if (app.meshEngine.isWifiMeshActive) Theme.accentEmerald else Theme.textMuted
+            if (app.cloudSync.isOnlineConnected) "Сеть Teron онлайн" else "Каталог офлайн",
+            if (app.cloudSync.isOnlineConnected) Theme.accentEmerald else Theme.textMuted
         ).apply {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                 rightMargin = Theme.dp(ctx, 6)
@@ -228,20 +228,15 @@ object HomeHubScreen {
                 topMargin = Theme.dp(ctx, 12)
             }
         }
-        meshBtns.addView(Components.secondaryButton(ctx, "Радар сети", R.drawable.ic_radar) {
-            onNavigateTab(1, "radar")
+        meshBtns.addView(Components.primaryButton(ctx, "Люди и контакты", R.drawable.ic_users) {
+            onNavigateTab(1, "contacts")
         }.apply {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
                 rightMargin = Theme.dp(ctx, 8)
             }
         })
-        meshBtns.addView(Components.primaryButton(ctx, "Сигнал SOS", R.drawable.ic_alert, Theme.accentCoral) {
-            app.meshEngine.sendChatMessage(
-                "#sos",
-                "Экстренный сигнал SOS от ${profile.displayName} (${profile.nodeId}). Требуется связь в радиусе ретрансляции AirMesh."
-            )
-            Toast.makeText(ctx, "Экстренный пакет отправлен в радиоэфир AirMesh", Toast.LENGTH_LONG).show()
-            onNavigateTab(1, "#sos")
+        meshBtns.addView(Components.secondaryButton(ctx, "Радар эфира", R.drawable.ic_radar) {
+            onNavigateTab(1, "radar")
         }.apply {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         })

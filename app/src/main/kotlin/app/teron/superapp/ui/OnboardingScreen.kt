@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
+import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -32,6 +33,7 @@ class OnboardingScreen(
     }
     private var draftName: String = ""
     private var draftHandle: String = ""
+    private var draftPhone: String = ""
     private var draftBio: String = ""
     private var draftImportSeed: String = ""
 
@@ -113,12 +115,20 @@ class OnboardingScreen(
         }
 
         val nameField = Components.labeledInput(ctx, "Ваше имя", "Например: Александр", draftName)
-        val handleField = Components.labeledInput(ctx, "Логин в сети AirMesh", "Например: aleksandr", draftHandle)
-        val bioField = Components.labeledInput(ctx, "О себе (необязательно)", "Должность, город или позывной", draftBio)
+        val handleField = Components.labeledInput(ctx, "Ник в сети Teron (@handle)", "Например: aleksandr", draftHandle)
+        val phoneField = Components.labeledInput(
+            ctx = ctx,
+            label = "Номер телефона (для синхронизации контактов)",
+            hintText = "+7 777 000 00 00 (хешируется SHA-256)",
+            initialValue = draftPhone,
+            inputType = InputType.TYPE_CLASS_PHONE
+        )
+        val bioField = Components.labeledInput(ctx, "О себе (необязательно)", "Должность, город или статус", draftBio)
 
         seg.addView(segTab("Новый аккаунт", !importMode) {
             draftName = nameField.input.text.toString()
             draftHandle = handleField.input.text.toString()
+            draftPhone = phoneField.input.text.toString()
             draftBio = bioField.input.text.toString()
             importMode = false
             render()
@@ -126,6 +136,7 @@ class OnboardingScreen(
         seg.addView(segTab("Восстановить по Seed", importMode) {
             draftName = nameField.input.text.toString()
             draftHandle = handleField.input.text.toString()
+            draftPhone = phoneField.input.text.toString()
             draftBio = bioField.input.text.toString()
             importMode = true
             render()
@@ -141,6 +152,7 @@ class OnboardingScreen(
         }
         profileCard.addView(nameField.container)
         profileCard.addView(handleField.container)
+        profileCard.addView(phoneField.container)
         profileCard.addView(bioField.container)
         col.addView(profileCard)
 
@@ -230,6 +242,7 @@ class OnboardingScreen(
             seedBtns.addView(Components.secondaryButton(ctx, "Новая фраза", R.drawable.ic_refresh) {
                 draftName = nameField.input.text.toString()
                 draftHandle = handleField.input.text.toString()
+                draftPhone = phoneField.input.text.toString()
                 draftBio = bioField.input.text.toString()
                 generatedMnemonic = Secp256k1Wallet.generateMnemonic12()
                 render()
@@ -275,8 +288,10 @@ class OnboardingScreen(
                 displayName = enteredName,
                 handleInput = handleField.input.text.toString(),
                 bio = bioField.input.text.toString(),
-                mnemonicOrNull = chosenSeed
+                mnemonicOrNull = chosenSeed,
+                phoneNumber = phoneField.input.text.toString()
             )
+            app.cloudSync.syncOwnProfileAsync()
             app.walletEngine.refreshAllChains(false)
             onCompleted()
         }.apply {

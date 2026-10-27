@@ -240,7 +240,8 @@ object Components {
         initialValue: String = "",
         isPassword: Boolean = false,
         singleLine: Boolean = true,
-        minLinesCount: Int = 1
+        minLinesCount: Int = 1,
+        inputType: Int? = null
     ): LabeledField {
         val box = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
@@ -269,7 +270,10 @@ object Components {
             setPadding(px, py, px, py)
             if (isPassword) {
                 setSingleLine(true)
-                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+                this.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            } else if (inputType != null) {
+                if (singleLine) setSingleLine(true)
+                this.inputType = inputType
             } else if (singleLine) {
                 setSingleLine(true)
             } else {

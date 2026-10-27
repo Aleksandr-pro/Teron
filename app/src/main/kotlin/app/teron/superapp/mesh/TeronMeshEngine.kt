@@ -20,6 +20,8 @@ import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.content.pm.PackageManager
+import android.net.nsd.NsdManager
+import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Handler
@@ -40,6 +42,7 @@ import java.net.DatagramSocket
 import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.MulticastSocket
 import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
@@ -60,7 +63,11 @@ class TeronMeshEngine(
 
         const val UDP_DISCOVERY_PORT = 47920
         const val TCP_FRAME_PORT = 47921
+        const val MULTICAST_GROUP_IP = "239.255.79.20"
+        const val NSD_SERVICE_TYPE = "_teron._tcp."
     }
+
+    var onOutboundPacketHook: ((MeshRelayPacket) -> Unit)? = null
 
     interface Listener {
         fun onMeshStateChanged()
@@ -93,6 +100,8 @@ class TeronMeshEngine(
     private var tcpServer: ServerSocket? = null
     private var multicastLock: WifiManager.MulticastLock? = null
     private var gattServer: BluetoothGattServer? = null
+    private var nsdRegListener: NsdManager.RegistrationListener? = null
+    private var nsdDiscListener: NsdManager.DiscoveryListener? = null
 
     fun addListener(l: Listener) { listeners.add(l) }
     fun removeListener(l: Listener) { listeners.remove(l) }
@@ -212,12 +221,16 @@ class TeronMeshEngine(
                 logEvent("Wi-Fi TCP порт занят или недоступен: ${e.message}")
             }
 
-            // Start UDP Beacon Listener & Broadcaster
+            // Start UDP + Multicast Beacon Listener & Broadcaster
             try {
-                val ds = DatagramSocket(null)
-                ds.reuseAddress = true
-                ds.broadcast = true
-                ds.bind(InetSocketAddress(UDP_DISCOVERY_PORT))
+                val ds = MulticastSocket(UDP_DISCOVERY_PORT).apply {
+                    reuseAddress = true
+                    broadcast = true
+                    try {
+                        @Suppress("DEPRECATION")
+                        joinGroup(InetAddress.getByName(MULTICAST_GROUP_IP))
+                    } catch (_: Exception) {}
+                }
                 udpSocket = ds
 
                 ioPool.execute {
@@ -247,11 +260,75 @@ class TeronMeshEngine(
             } catch (e: Exception) {
                 logEvent("UDP маяк AirMesh: ${e.message}")
             }
+
+            startNsdDiscoveryAndRegistration()
         }
+    }
+
+    private fun startNsdDiscoveryAndRegistration() {
+        val nsd = context.applicationContext.getSystemService(Context.NSD_SERVICE) as? NsdManager ?: return
+        val me = try { db.getProfile() } catch (_: Throwable) { return }
+
+        stopNsdQuietly(nsd)
+
+        try {
+            val svcInfo = NsdServiceInfo().apply {
+                serviceName = "Teron-${me.nodeId}"
+                serviceType = NSD_SERVICE_TYPE
+                port = TCP_FRAME_PORT
+            }
+            val reg = object : NsdManager.RegistrationListener {
+                override fun onServiceRegistered(info: NsdServiceInfo) {
+                    logEvent("mDNS сервис зарегистрирован (${info.serviceName})")
+                }
+                override fun onRegistrationFailed(info: NsdServiceInfo, errorCode: Int) {}
+                override fun onServiceUnregistered(info: NsdServiceInfo) {}
+                override fun onUnregistrationFailed(info: NsdServiceInfo, errorCode: Int) {}
+            }
+            nsdRegListener = reg
+            nsd.registerService(svcInfo, NsdManager.PROTOCOL_DNS_SD, reg)
+        } catch (_: Throwable) {}
+
+        try {
+            val disc = object : NsdManager.DiscoveryListener {
+                override fun onDiscoveryStarted(regType: String) {}
+                override fun onServiceFound(service: NsdServiceInfo) {
+                    val sName = service.serviceName ?: return
+                    if (!sName.startsWith("Teron-") || sName.contains(me.nodeId)) return
+                    try {
+                        @Suppress("DEPRECATION")
+                        nsd.resolveService(service, object : NsdManager.ResolveListener {
+                            override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {}
+                            override fun onServiceResolved(resolved: NsdServiceInfo) {
+                                @Suppress("DEPRECATION")
+                                val hostIp = resolved.host?.hostAddress ?: return
+                                val port = if (resolved.port > 0) resolved.port else TCP_FRAME_PORT
+                                handshakeWithTcpPeer(hostIp, port)
+                            }
+                        })
+                    } catch (_: Throwable) {}
+                }
+                override fun onServiceLost(service: NsdServiceInfo) {}
+                override fun onDiscoveryStopped(serviceType: String) {}
+                override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {}
+                override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {}
+            }
+            nsdDiscListener = disc
+            nsd.discoverServices(NSD_SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, disc)
+        } catch (_: Throwable) {}
+    }
+
+    private fun stopNsdQuietly(nsd: NsdManager?) {
+        val mgr = nsd ?: (context.applicationContext.getSystemService(Context.NSD_SERVICE) as? NsdManager) ?: return
+        nsdRegListener?.let { try { mgr.unregisterService(it) } catch (_: Throwable) {} }
+        nsdDiscListener?.let { try { mgr.stopServiceDiscovery(it) } catch (_: Throwable) {} }
+        nsdRegListener = null
+        nsdDiscListener = null
     }
 
     private fun stopWifiLanTransport() {
         isWifiMeshActive = false
+        stopNsdQuietly(null)
         try { udpSocket?.close() } catch (_: Exception) {}
         try { tcpServer?.close() } catch (_: Exception) {}
         try { if (multicastLock?.isHeld == true) multicastLock?.release() } catch (_: Exception) {}
@@ -259,9 +336,9 @@ class TeronMeshEngine(
         tcpServer = null
     }
 
-    private fun broadcastUdpPresence(ds: DatagramSocket) {
+    private fun buildOwnBeaconJson(): String {
         val me = db.getProfile()
-        val beacon = JSONObject().apply {
+        return JSONObject().apply {
             put("proto", "TERON_BEACON_V1")
             put("nodeId", me.nodeId)
             put("name", me.displayName)
@@ -269,9 +346,14 @@ class TeronMeshEngine(
             put("pubKey", me.publicKeyB64)
             put("port", TCP_FRAME_PORT)
             put("ts", System.currentTimeMillis())
-        }.toString().toByteArray(Charsets.UTF_8)
+        }.toString()
+    }
+
+    private fun broadcastUdpPresence(ds: DatagramSocket) {
+        val beacon = buildOwnBeaconJson().toByteArray(Charsets.UTF_8)
 
         val targets = linkedSetOf<InetAddress>()
+        try { targets.add(InetAddress.getByName(MULTICAST_GROUP_IP)) } catch (_: Exception) {}
         try { targets.add(InetAddress.getByName("255.255.255.255")) } catch (_: Exception) {}
         try {
             val ifaces = NetworkInterface.getNetworkInterfaces()
@@ -334,14 +416,47 @@ class TeronMeshEngine(
         } catch (_: Exception) {}
     }
 
+    private fun handshakeWithTcpPeer(ip: String, port: Int = TCP_FRAME_PORT) {
+        if (ip.isBlank() || ip == "127.0.0.1") return
+        ioPool.execute {
+            try {
+                Socket().use { s ->
+                    s.connect(InetSocketAddress(ip, port), 2_500)
+                    s.soTimeout = 3_000
+                    val writer = OutputStreamWriter(s.getOutputStream(), Charsets.UTF_8)
+                    val reader = BufferedReader(InputStreamReader(s.getInputStream(), Charsets.UTF_8))
+                    writer.write(buildOwnBeaconJson() + "\n")
+                    for (pkt in db.getPendingRelayPackets(15)) {
+                        writer.write(pkt + "\n")
+                    }
+                    writer.flush()
+                    val firstReply = reader.readLine()?.trim()
+                    if (!firstReply.isNullOrEmpty() && firstReply.contains("TERON_BEACON_V1")) {
+                        handleUdpBeacon(firstReply, ip)
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
     private fun handleIncomingTcpPeer(socket: Socket) {
         socket.use { s ->
             s.soTimeout = 6_000
+            val senderIp = s.inetAddress?.hostAddress ?: ""
+            val writer = OutputStreamWriter(s.getOutputStream(), Charsets.UTF_8)
+            try {
+                writer.write(buildOwnBeaconJson() + "\n")
+                writer.flush()
+            } catch (_: Exception) {}
+
             val reader = BufferedReader(InputStreamReader(s.getInputStream(), Charsets.UTF_8))
             var line: String?
             while (reader.readLine().also { line = it } != null) {
                 val frame = line?.trim() ?: continue
-                if (frame.isNotEmpty()) {
+                if (frame.isEmpty()) continue
+                if (frame.contains("TERON_BEACON_V1")) {
+                    handleUdpBeacon(frame, senderIp)
+                } else {
                     processIncomingPacketJson(frame, "Wi-Fi P2P")
                 }
             }
@@ -527,25 +642,43 @@ class TeronMeshEngine(
         }
     }
 
+    fun triggerDiscoverySweep() {
+        ioPool.execute {
+            try {
+                udpSocket?.let { broadcastUdpPresence(it) }
+            } catch (_: Throwable) {}
+            startNsdDiscoveryAndRegistration()
+        }
+        mainHandler.post {
+            stopBleTransport()
+            refreshBleTransport()
+        }
+    }
+
     private fun startBleAdvertising(adapter: BluetoothAdapter) {
         if (isBleAdvertising) return
         val advertiser = adapter.bluetoothLeAdvertiser ?: return
         try {
             val me = db.getProfile()
-            // Compact 8-byte payload inside 31-byte BLE advertising budget!
+            // Split Service UUID (Primary Adv PDU <= 21B) and 8B Node ID (Scan Response PDU <= 29B)
+            // so legacy 31-byte BLE advertising never fails with ADVERTISE_FAILED_DATA_TOO_LARGE!
             val shortCode = me.nodeId.removePrefix("TRN-").take(8).toByteArray(Charsets.US_ASCII)
             val settings = AdvertiseSettings.Builder()
                 .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
                 .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
                 .setConnectable(true)
                 .build()
-            val data = AdvertiseData.Builder()
+            val advData = AdvertiseData.Builder()
                 .setIncludeDeviceName(false)
                 .setIncludeTxPowerLevel(false)
                 .addServiceUuid(ParcelUuid(SERVICE_UUID))
+                .build()
+            val scanResponse = AdvertiseData.Builder()
+                .setIncludeDeviceName(false)
+                .setIncludeTxPowerLevel(false)
                 .addServiceData(ParcelUuid(SERVICE_UUID), shortCode)
                 .build()
-            advertiser.startAdvertising(settings, data, advertiseCallback)
+            advertiser.startAdvertising(settings, advData, scanResponse, advertiseCallback)
         } catch (_: SecurityException) {
         } catch (e: Exception) {
             logEvent("BLE Advertising: ${e.message}")
@@ -769,6 +902,8 @@ class TeronMeshEngine(
         put("createdAtMs", p.createdAtMs)
     }.toString()
 
+    fun parseRelayPacketJson(raw: String): MeshRelayPacket? = jsonToPacket(raw)
+
     private fun jsonToPacket(raw: String): MeshRelayPacket? = try {
         val o = JSONObject(raw)
         MeshRelayPacket(
@@ -889,6 +1024,7 @@ class TeronMeshEngine(
 
         db.enqueueRelayPacket(packetId, json, targetId, ttl)
         sendFrameToAllWifiPeers(json)
+        onOutboundPacketHook?.invoke(pkt)
         logEvent("Отправлен пакет ${packetId.take(8)} ($kind, TTL=$ttl)")
     }
 
@@ -955,6 +1091,7 @@ class TeronMeshEngine(
         )
         db.enqueueRelayPacket(packetId, json, targetId, me.maxRelayHops)
         sendFrameToAllWifiPeers(json)
+        onOutboundPacketHook?.invoke(pkt)
         logEvent("Письмо «${subject.take(22)}» поставлено в AirMesh ($folder)")
     }
 
@@ -999,6 +1136,7 @@ class TeronMeshEngine(
         seenPackets.add(packetId)
         db.enqueueRelayPacket(packetId, json, "*", me.maxRelayHops)
         sendFrameToAllWifiPeers(json)
+        onOutboundPacketHook?.invoke(pkt)
         logEvent("Подписанный крипто-перевод $amount $symbol отправлен в AirMesh")
     }
 
@@ -1193,6 +1331,7 @@ class TeronMeshEngine(
         seenPackets.add(ackId)
         db.enqueueRelayPacket(ackId, json, recipientNodeId, 4)
         sendFrameToAllWifiPeers(json)
+        onOutboundPacketHook?.invoke(ack)
     }
 
     fun getLocalIpv4(): String {
