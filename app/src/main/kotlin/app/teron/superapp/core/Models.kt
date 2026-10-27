@@ -10,7 +10,9 @@ data class UserProfile(
     val publicKeyB64: String,
     val privateKeyB64: String,
     val seedPhrase: String,
-    val walletAddress: String,
+    val walletAddress: String, // Primary ETH 0x... address
+    val btcAddress: String = "",
+    val trxAddress: String = "",
     val maxRelayHops: Int = 4,
     val darkTheme: Boolean = true,
     val backgroundDaemon: Boolean = false
@@ -39,7 +41,8 @@ data class ChatConversationSummary(
     val lastTimestampMs: Long,
     val unreadCount: Int,
     val accentColor: Int,
-    val glyph: String,
+    val iconRes: Int,
+    val initials: String,
     val isChannel: Boolean,
     val isOnlineNearby: Boolean,
     val hops: Int
@@ -69,7 +72,7 @@ data class MeshRelayPacket(
     val senderName: String,
     val senderHandle: String,
     val senderPubKey: String,
-    val targetNodeId: String, // "*" for broadcast or specific nodeId
+    val targetNodeId: String,
     val ttl: Int,
     val hopCount: Int,
     val viaNodes: String,
@@ -79,6 +82,19 @@ data class MeshRelayPacket(
     val metaSubject: String = "",
     val createdAtMs: Long
 )
+
+data class MailAccountConfig(
+    val email: String,
+    val password: String,
+    val senderName: String,
+    val imapHost: String,
+    val imapPort: Int,
+    val smtpHost: String,
+    val smtpPort: Int
+) {
+    val isConfigured: Boolean
+        get() = email.isNotBlank() && password.isNotBlank() && imapHost.isNotBlank() && smtpHost.isNotBlank()
+}
 
 data class MailItem(
     val id: Long,
@@ -94,7 +110,7 @@ data class MailItem(
     val isStarred: Boolean,
     val viaAirMesh: Boolean,
     val hopCount: Int,
-    val priority: String // NORMAL, HIGH, SOS
+    val priority: String
 )
 
 data class MusicTrack(
@@ -126,24 +142,30 @@ data class HanziCard(
 )
 
 data class WalletBalance(
+    val assetKey: String, // BTC, ETH, USDT_TRC20, USDT_ERC20, TRX
     val symbol: String,
+    val networkLabel: String,
     val name: String,
+    val address: String,
     val balance: Double,
+    val rateUsd: Double,
     val rateRub: Double,
     val accentColor: Int,
-    val glyph: String
+    val iconRes: Int,
+    val decimalsDisplay: Int
 )
 
 data class WalletTx(
     val id: Long,
     val txHash: String,
     val symbol: String,
+    val network: String,
     val amount: Double,
     val counterpartyName: String,
     val counterpartyAddress: String,
     val isIncoming: Boolean,
     val memo: String,
-    val signatureHex: String,
+    val status: String,
     val viaAirMesh: Boolean,
     val timestampMs: Long
 )

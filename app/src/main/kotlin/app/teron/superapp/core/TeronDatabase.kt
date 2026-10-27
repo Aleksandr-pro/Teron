@@ -4,10 +4,10 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
-import org.json.JSONObject
-import java.util.UUID
+import app.teron.superapp.R
+import app.teron.superapp.crypto.Secp256k1Wallet
 
-class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superapp.db", null, 1) {
+class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superapp.db", null, 2) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -24,6 +24,8 @@ class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superap
                 private_key TEXT NOT NULL,
                 seed_phrase TEXT NOT NULL,
                 wallet_address TEXT NOT NULL,
+                btc_address TEXT NOT NULL DEFAULT '',
+                trx_address TEXT NOT NULL DEFAULT '',
                 max_relay_hops INTEGER NOT NULL DEFAULT 4,
                 dark_theme INTEGER NOT NULL DEFAULT 1,
                 bg_daemon INTEGER NOT NULL DEFAULT 0,
@@ -120,36 +122,7 @@ class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superap
             """.trimIndent()
         )
 
-        db.execSQL(
-            """
-            CREATE TABLE wallet_balances (
-                symbol TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                balance REAL NOT NULL,
-                rate_rub REAL NOT NULL,
-                accent_color INTEGER NOT NULL,
-                glyph TEXT NOT NULL
-            )
-            """.trimIndent()
-        )
-
-        db.execSQL(
-            """
-            CREATE TABLE wallet_txs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                tx_hash TEXT UNIQUE NOT NULL,
-                symbol TEXT NOT NULL,
-                amount REAL NOT NULL,
-                counterparty_name TEXT NOT NULL,
-                counterparty_address TEXT NOT NULL,
-                is_incoming INTEGER NOT NULL,
-                memo TEXT NOT NULL,
-                signature_hex TEXT NOT NULL,
-                via_airmesh INTEGER NOT NULL,
-                timestamp_ms INTEGER NOT NULL
-            )
-            """.trimIndent()
-        )
+        createWalletTablesV2(db)
 
         db.execSQL(
             """
@@ -160,175 +133,158 @@ class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superap
             """.trimIndent()
         )
 
-        seedInitialData(db)
+        initializeCleanIdentity(db)
+    }
+
+    private fun createWalletTablesV2(db: SQLiteDatabase) {
+        db.execSQL("DROP TABLE IF EXISTS wallet_balances")
+        db.execSQL("DROP TABLE IF EXISTS wallet_txs")
+
+        db.execSQL(
+            """
+            CREATE TABLE wallet_balances (
+                asset_key TEXT PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                network_label TEXT NOT NULL,
+                name TEXT NOT NULL,
+                balance REAL NOT NULL DEFAULT 0.0,
+                rate_usd REAL NOT NULL DEFAULT 0.0,
+                rate_rub REAL NOT NULL DEFAULT 0.0,
+                accent_color INTEGER NOT NULL,
+                decimals_display INTEGER NOT NULL DEFAULT 4
+            )
+            """.trimIndent()
+        )
+
+        db.execSQL(
+            """
+            CREATE TABLE wallet_txs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tx_hash TEXT UNIQUE NOT NULL,
+                symbol TEXT NOT NULL,
+                network TEXT NOT NULL,
+                amount REAL NOT NULL,
+                counterparty_name TEXT NOT NULL,
+                counterparty_address TEXT NOT NULL,
+                is_incoming INTEGER NOT NULL,
+                memo TEXT NOT NULL,
+                status TEXT NOT NULL,
+                via_airmesh INTEGER NOT NULL,
+                timestamp_ms INTEGER NOT NULL
+            )
+            """.trimIndent()
+        )
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // Future migrations preserve user data across APK updates
+        if (oldVersion < 2) {
+            try { db.execSQL("ALTER TABLE profile ADD COLUMN btc_address TEXT NOT NULL DEFAULT ''") } catch (_: Throwable) {}
+            try { db.execSQL("ALTER TABLE profile ADD COLUMN trx_address TEXT NOT NULL DEFAULT ''") } catch (_: Throwable) {}
+
+            // Remove all v1 demo/seeded messages & mails while preserving real user messages
+            db.delete("messages", "packet_id IN ('welcome-airmesh-1', 'welcome-notes-1') OR packet_id LIKE 'sim-%'", null)
+            db.delete("mails", "packet_id IN ('mail-welcome-1', 'mail-welcome-2')", null)
+
+            // Replace v1 demo wallet tables with clean 0.00 real blockchain asset rows
+            createWalletTablesV2(db)
+            initRealAssetRows(db)
+
+            // Upgrade non-BIP39 v1 seed to canonical BIP-39 multi-chain wallet
+            db.rawQuery("SELECT display_name, seed_phrase FROM profile WHERE id = 1", null).use { c ->
+                if (c.moveToFirst()) {
+                    val curName = c.getString(0) ?: ""
+                    val curSeed = c.getString(1) ?: ""
+                    val id = if (Secp256k1Wallet.validateMnemonic(curSeed)) {
+                        TeronCrypto.generateIdentity(curSeed)
+                    } else {
+                        TeronCrypto.generateIdentity(null)
+                    }
+                    val cv = ContentValues().apply {
+                        put("node_id", id.nodeId)
+                        put("seed_phrase", id.seedPhrase)
+                        put("wallet_address", id.walletAddress)
+                        put("btc_address", id.btcAddress)
+                        put("trx_address", id.trxAddress)
+                        put("public_key", id.publicKeyB64)
+                        put("private_key", id.privateKeyB64)
+                        put("avatar_glyph", Theme.initialsFor(curName.ifBlank { "T" }))
+                        if (curName.startsWith("Пилот ") || curName.isBlank()) {
+                            put("onboarded", 0)
+                        }
+                    }
+                    db.update("profile", cv, "id = 1", null)
+                }
+            }
+        }
     }
 
-    private fun seedInitialData(db: SQLiteDatabase) {
-        val id = TeronCrypto.generateIdentity()
+    private fun initializeCleanIdentity(db: SQLiteDatabase) {
+        val id = TeronCrypto.generateIdentity(null)
         val shortTag = id.nodeId.substringAfter("TRN-").lowercase()
-        val now = System.currentTimeMillis()
-
-        val profileCv = ContentValues().apply {
+        db.insert("profile", null, ContentValues().apply {
             put("id", 1)
             put("node_id", id.nodeId)
-            put("display_name", "Пилот $shortTag")
-            put("handle", "user_$shortTag@teron.mesh")
-            put("bio", "На связи через Teron AirMesh • Автономная сеть")
-            put("avatar_color", Theme.accentIndigo)
-            put("avatar_glyph", "⚡")
+            put("display_name", "")
+            put("handle", "$shortTag@teron.mesh")
+            put("bio", "")
+            put("avatar_color", Theme.brand)
+            put("avatar_glyph", "T")
             put("public_key", id.publicKeyB64)
             put("private_key", id.privateKeyB64)
             put("seed_phrase", id.seedPhrase)
             put("wallet_address", id.walletAddress)
+            put("btc_address", id.btcAddress)
+            put("trx_address", id.trxAddress)
             put("max_relay_hops", 4)
             put("dark_theme", 1)
             put("bg_daemon", 0)
             put("onboarded", 0)
-        }
-        db.insert("profile", null, profileCv)
+        })
+        initRealAssetRows(db)
+    }
 
-        // Seed starter messages in #airmesh & saved notes
-        val chKey = TeronCrypto.deriveChannelKey("#airmesh")
-        val encWelcome = TeronCrypto.encryptAesGcm(
-            "Эфир AirMesh активен. Все устройства Teron поблизости (по Bluetooth LE и локальному Wi-Fi / Хот-споту) автоматически образуют ячеистую mesh-сеть с эстафетной передачей до 4 переходов.",
-            chKey
+    private fun initRealAssetRows(db: SQLiteDatabase) {
+        data class Spec(val key: String, val sym: String, val net: String, val name: String, val color: Int, val dec: Int)
+        val specs = listOf(
+            Spec("USDT_TRC20", "USDT", "TRC-20 • TRON", "Tether USD", Theme.colorUsdt, 2),
+            Spec("USDT_ERC20", "USDT", "ERC-20 • Ethereum", "Tether USD", Theme.colorUsdt, 2),
+            Spec("BTC", "BTC", "Bitcoin • SegWit", "Bitcoin", Theme.colorBtc, 6),
+            Spec("ETH", "ETH", "Ethereum • Mainnet", "Ethereum", Theme.colorEth, 5),
+            Spec("TRX", "TRX", "TRON • Mainnet", "TRON", Theme.colorTrx, 2)
         )
-        db.insert("messages", null, ContentValues().apply {
-            put("packet_id", "welcome-airmesh-1")
-            put("conversation_id", "#airmesh")
-            put("sender_node_id", "TRN-SYSTEM")
-            put("sender_name", "Ядро AirMesh")
-            put("recipient_node_id", "*")
-            put("body", "Эфир AirMesh активен. Устройства Teron поблизости автоматически находят друг друга по Bluetooth LE и Wi-Fi без интернета и передают зашифрованные сообщения по цепочке (Store & Forward).")
-            put("cipher_preview", encWelcome.cipherTextB64.take(36) + "…")
-            put("timestamp_ms", now - 120_000L)
-            put("is_outgoing", 0)
-            put("transport", "AirMesh Core")
-            put("hop_count", 0)
-            put("via_path", "Локальный узел")
-            put("delivery_state", "AES-256-GCM")
-            put("is_read", 1)
-        })
-
-        db.insert("messages", null, ContentValues().apply {
-            put("packet_id", "welcome-notes-1")
-            put("conversation_id", "notes")
-            put("sender_node_id", id.nodeId)
-            put("sender_name", "Избранное")
-            put("recipient_node_id", id.nodeId)
-            put("body", "Личное офлайн-хранилище Teron. Заметки, координаты маршрута и ключи шифруются и хранятся исключительно в памяти вашего телефона.")
-            put("cipher_preview", "LOCAL-AES256-GCM")
-            put("timestamp_ms", now - 300_000L)
-            put("is_outgoing", 1)
-            put("transport", "Локально")
-            put("hop_count", 0)
-            put("via_path", id.nodeId)
-            put("delivery_state", "Сохранено на устройстве")
-            put("is_read", 1)
-        })
-
-        // Seed Teron Mail welcome letters
-        db.insert("mails", null, ContentValues().apply {
-            put("packet_id", "mail-welcome-1")
-            put("folder", "INBOX")
-            put("from_name", "Команда Teron")
-            put("from_address", "core@teron.mesh")
-            put("to_address", "user_$shortTag@teron.mesh")
-            put("subject", "Добро пожаловать в Teron — автономную экосистему")
-            put(
-                "body",
-                "Приветствуем в Teron!\n\n" +
-                    "Ваш персональный почтовый адрес в mesh-сети: user_$shortTag@teron.mesh\n" +
-                    "Ваш узел AirMesh: ${id.nodeId}\n\n" +
-                    "Что умеет Teron Mail:\n" +
-                    "1. Отправка писем напрямую между смартфонами без интернета по цепочке AirMesh (BLE + Wi-Fi P2P).\n" +
-                    "2. Режим Store & Forward: если адресат далеко, письмо сохраняется в очереди и автоматически уходит при встрече с любым промежуточным узлом Teron.\n" +
-                    "3. Подключение внешнего почтового ящика по защищённому SSL SMTP/IMAP, когда появляется интернет.\n\n" +
-                    "Обменяйтесь лучевыми SunCode-кодами с друзьями, чтобы мгновенно добавить их ключи шифрования!"
-            )
-            put("timestamp_ms", now - 60_000L)
-            put("is_read", 0)
-            put("is_starred", 1)
-            put("via_airmesh", 1)
-            put("hop_count", 1)
-            put("priority", "HIGH")
-        })
-
-        db.insert("mails", null, ContentValues().apply {
-            put("packet_id", "mail-welcome-2")
-            put("folder", "INBOX")
-            put("from_name", "Протокол безопасности AirMesh")
-            put("from_address", "security@teron.mesh")
-            put("to_address", "user_$shortTag@teron.mesh")
-            put("subject", "Как проверить связь без интернета на двух смартфонах")
-            put(
-                "body",
-                "Инструкция для полевого теста:\n\n" +
-                    "• Установите Teron APK на два или более Android-смартфона.\n" +
-                    "• Разрешите доступ к Bluetooth / Устройствам рядом (или подключите телефоны к одной точке доступа Wi-Fi даже без SIM-карты и интернета).\n" +
-                    "• Откройте вкладку «Чаты → Радар AirMesh»: смартфоны автоматически обнаружат друг друга, покажут уровень сигнала RSSI (дБм) и дистанцию в метрах.\n" +
-                    "• Отправьте личное сообщение, письмо или крипто-перевод TeronPay — пакет пройдёт с шифрованием ECDH + AES-256-GCM и цифровой подписью ECDSA!"
-            )
-            put("timestamp_ms", now - 180_000L)
-            put("is_read", 0)
-            put("is_starred", 0)
-            put("via_airmesh", 1)
-            put("hop_count", 0)
-            put("priority", "NORMAL")
-        })
-
-        // Seed TeronPay Wallet assets
-        val assets = listOf(
-            WalletBalance("TRN", "Teron Mesh Token", 250.0, 42.5, Theme.accentCyan, "⚡"),
-            WalletBalance("TON", "Toncoin", 18.4, 495.0, Theme.accentBlue, "💎"),
-            WalletBalance("USDT", "Tether USD", 125.0, 96.2, Theme.accentEmerald, "₮"),
-            WalletBalance("BTC", "Bitcoin", 0.0042, 8_950_000.0, Theme.accentAmber, "₿")
-        )
-        for (a in assets) {
-            db.insert("wallet_balances", null, ContentValues().apply {
-                put("symbol", a.symbol)
-                put("name", a.name)
-                put("balance", a.balance)
-                put("rate_rub", a.rateRub)
-                put("accent_color", a.accentColor)
-                put("glyph", a.glyph)
-            })
+        for (s in specs) {
+            db.insertWithOnConflict("wallet_balances", null, ContentValues().apply {
+                put("asset_key", s.key)
+                put("symbol", s.sym)
+                put("network_label", s.net)
+                put("name", s.name)
+                put("balance", 0.0)
+                put("rate_usd", 0.0)
+                put("rate_rub", 0.0)
+                put("accent_color", s.color)
+                put("decimals_display", s.dec)
+            }, SQLiteDatabase.CONFLICT_IGNORE)
         }
-
-        val genesisSig = TeronCrypto.signData(id.privateKeyB64, "GENESIS:${id.walletAddress}:250.0:TRN")
-        db.insert("wallet_txs", null, ContentValues().apply {
-            put("tx_hash", "0x" + TeronCrypto.shortSha256Hex("genesis-${id.nodeId}", 12))
-            put("symbol", "TRN")
-            put("amount", 250.0)
-            put("counterparty_name", "Teron Genesis Pool")
-            put("counterparty_address", "trn10000000000000000genesis")
-            put("is_incoming", 1)
-            put("memo", "Стартовый грант узла AirMesh")
-            put("signature_hex", genesisSig.take(32))
-            put("via_airmesh", 1)
-            put("timestamp_ms", now - 240_000L)
-        })
     }
 
     fun getProfile(): UserProfile {
-        val db = readableDatabase
-        db.rawQuery("SELECT * FROM profile WHERE id = 1", null).use { c ->
+        readableDatabase.rawQuery("SELECT * FROM profile WHERE id = 1", null).use { c ->
             if (c.moveToFirst()) {
+                val rawName = c.getString(c.getColumnIndexOrThrow("display_name"))
+                val nodeId = c.getString(c.getColumnIndexOrThrow("node_id"))
                 return UserProfile(
-                    nodeId = c.getString(c.getColumnIndexOrThrow("node_id")),
-                    displayName = c.getString(c.getColumnIndexOrThrow("display_name")),
+                    nodeId = nodeId,
+                    displayName = rawName.ifBlank { nodeId },
                     handle = c.getString(c.getColumnIndexOrThrow("handle")),
                     bio = c.getString(c.getColumnIndexOrThrow("bio")),
                     avatarColor = c.getInt(c.getColumnIndexOrThrow("avatar_color")),
-                    avatarGlyph = c.getString(c.getColumnIndexOrThrow("avatar_glyph")),
+                    avatarGlyph = c.getString(c.getColumnIndexOrThrow("avatar_glyph")).ifBlank { Theme.initialsFor(rawName.ifBlank { nodeId }) },
                     publicKeyB64 = c.getString(c.getColumnIndexOrThrow("public_key")),
                     privateKeyB64 = c.getString(c.getColumnIndexOrThrow("private_key")),
                     seedPhrase = c.getString(c.getColumnIndexOrThrow("seed_phrase")),
                     walletAddress = c.getString(c.getColumnIndexOrThrow("wallet_address")),
+                    btcAddress = c.getString(c.getColumnIndexOrThrow("btc_address")),
+                    trxAddress = c.getString(c.getColumnIndexOrThrow("trx_address")),
                     maxRelayHops = c.getInt(c.getColumnIndexOrThrow("max_relay_hops")),
                     darkTheme = c.getInt(c.getColumnIndexOrThrow("dark_theme")) == 1,
                     backgroundDaemon = c.getInt(c.getColumnIndexOrThrow("bg_daemon")) == 1
@@ -344,8 +300,83 @@ class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superap
         }
     }
 
-    fun markOnboarded() {
-        writableDatabase.update("profile", ContentValues().apply { put("onboarded", 1) }, "id = 1", null)
+    fun completeOnboarding(
+        displayName: String,
+        handleInput: String,
+        bio: String,
+        mnemonicOrNull: String?
+    ) {
+        val cur = getProfile()
+        val id = if (!mnemonicOrNull.isNullOrBlank() && Secp256k1Wallet.validateMnemonic(mnemonicOrNull)) {
+            TeronCrypto.generateIdentity(mnemonicOrNull)
+        } else {
+            // Keep pre-generated BIP-39 mnemonic shown during onboarding if matches, else generate fresh
+            if (!mnemonicOrNull.isNullOrBlank()) TeronCrypto.generateIdentity(mnemonicOrNull)
+            else TeronCrypto.generateIdentity(cur.seedPhrase)
+        }
+        val cleanName = displayName.trim().ifBlank { id.nodeId }
+        val normalizedHandle = handleInput.trim().lowercase().let { h ->
+            when {
+                h.isBlank() -> "${id.nodeId.substringAfter("TRN-").lowercase()}@teron.mesh"
+                h.contains("@") -> h
+                else -> "$h@teron.mesh"
+            }
+        }
+        val color = Theme.avatarPalette[(cleanName.hashCode() and 0x7FFFFFFF) % Theme.avatarPalette.size]
+        val initials = Theme.initialsFor(cleanName)
+
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.update("profile", ContentValues().apply {
+                put("node_id", id.nodeId)
+                put("display_name", cleanName)
+                put("handle", normalizedHandle)
+                put("bio", bio.trim())
+                put("avatar_color", color)
+                put("avatar_glyph", initials)
+                put("public_key", id.publicKeyB64)
+                put("private_key", id.privateKeyB64)
+                put("seed_phrase", id.seedPhrase)
+                put("wallet_address", id.walletAddress)
+                put("btc_address", id.btcAddress)
+                put("trx_address", id.trxAddress)
+                put("onboarded", 1)
+            }, "id = 1", null)
+
+            // Reset cached wallet balances if seed changed
+            if (id.walletAddress != cur.walletAddress) {
+                db.update("wallet_balances", ContentValues().apply { put("balance", 0.0) }, null, null)
+                db.delete("wallet_txs", null, null)
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    fun importWalletSeed(mnemonic: String): Boolean {
+        if (!Secp256k1Wallet.validateMnemonic(mnemonic)) return false
+        val id = TeronCrypto.generateIdentity(mnemonic)
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.update("profile", ContentValues().apply {
+                put("node_id", id.nodeId)
+                put("seed_phrase", id.seedPhrase)
+                put("wallet_address", id.walletAddress)
+                put("btc_address", id.btcAddress)
+                put("trx_address", id.trxAddress)
+                put("public_key", id.publicKeyB64)
+                put("private_key", id.privateKeyB64)
+            }, "id = 1", null)
+            db.update("wallet_balances", ContentValues().apply { put("balance", 0.0) }, null, null)
+            db.delete("wallet_txs", null, null)
+            db.setTransactionSuccessful()
+            return true
+        } finally {
+            db.endTransaction()
+        }
     }
 
     fun updateProfile(
@@ -358,12 +389,21 @@ class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superap
         darkTheme: Boolean,
         backgroundDaemon: Boolean
     ) {
+        val cur = getProfile()
+        val cleanName = displayName.trim().ifBlank { cur.displayName }
+        val cleanHandle = handle.trim().lowercase().let {
+            when {
+                it.isBlank() -> cur.handle
+                it.contains("@") -> it
+                else -> "$it@teron.mesh"
+            }
+        }
         writableDatabase.update("profile", ContentValues().apply {
-            put("display_name", displayName.trim().ifBlank { "Пилот Teron" })
-            put("handle", handle.trim().ifBlank { "pilot@teron.mesh" })
+            put("display_name", cleanName)
+            put("handle", cleanHandle)
             put("bio", bio.trim())
             put("avatar_color", avatarColor)
-            put("avatar_glyph", avatarGlyph)
+            put("avatar_glyph", avatarGlyph.trim().take(2).uppercase().ifBlank { Theme.initialsFor(cleanName) })
             put("max_relay_hops", maxRelayHops.coerceIn(1, 6))
             put("dark_theme", if (darkTheme) 1 else 0)
             put("bg_daemon", if (backgroundDaemon) 1 else 0)
@@ -371,16 +411,23 @@ class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superap
         }, "id = 1", null)
     }
 
-    fun upsertContact(nodeId: String, displayName: String, handle: String, publicKeyB64: String, avatarColor: Int = Theme.accentCyan) {
-        if (nodeId.isBlank() || nodeId == getProfile().nodeId) return
+    // --- Contacts ---
+    fun upsertContact(nodeId: String, displayName: String, handle: String, publicKeyB64: String, avatarColor: Int = Theme.brand) {
+        val cleanId = nodeId.trim()
+        if (cleanId.isBlank() || cleanId == getProfile().nodeId) return
+        val color = Theme.avatarPalette[(cleanId.hashCode() and 0x7FFFFFFF) % Theme.avatarPalette.size]
         writableDatabase.insertWithOnConflict("contacts", null, ContentValues().apply {
-            put("node_id", nodeId)
-            put("display_name", displayName.ifBlank { nodeId })
-            put("handle", handle.ifBlank { "${nodeId.lowercase()}@teron.mesh" })
+            put("node_id", cleanId)
+            put("display_name", displayName.trim().ifBlank { cleanId })
+            put("handle", handle.trim().ifBlank { "${cleanId.lowercase()}@teron.mesh" })
             put("public_key", publicKeyB64)
-            put("avatar_color", avatarColor)
+            put("avatar_color", if (avatarColor == Theme.brand) color else avatarColor)
             put("added_at", System.currentTimeMillis())
         }, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    fun deleteContact(nodeId: String) {
+        writableDatabase.delete("contacts", "node_id = ?", arrayOf(nodeId))
     }
 
     fun getContacts(): List<MeshPeer> {
@@ -393,8 +440,8 @@ class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superap
                         displayName = c.getString(c.getColumnIndexOrThrow("display_name")),
                         handle = c.getString(c.getColumnIndexOrThrow("handle")),
                         publicKeyB64 = c.getString(c.getColumnIndexOrThrow("public_key")),
-                        transport = "Контакт SunCode",
-                        rssi = -65,
+                        transport = "Доверенный контакт",
+                        rssi = 0,
                         distanceMeters = 0.0,
                         hops = 1,
                         ipAddress = null,
@@ -418,6 +465,7 @@ class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superap
         return null
     }
 
+    // --- Messenger ---
     fun insertMessageIfNew(
         packetId: String,
         conversationId: String,
@@ -451,6 +499,10 @@ class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superap
             put("is_read", if (isRead) 1 else 0)
         }, SQLiteDatabase.CONFLICT_IGNORE)
         return rowId != -1L
+    }
+
+    fun deleteMessage(id: Long) {
+        writableDatabase.delete("messages", "id = ?", arrayOf(id.toString()))
     }
 
     fun updateMessageDeliveryState(packetId: String, state: String, transport: String? = null) {
@@ -510,14 +562,14 @@ class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superap
         val result = mutableListOf<ChatConversationSummary>()
         val contactsMap = getContacts().associateBy { it.nodeId }
 
-        fun lastMsgFor(convId: String): Pair<String, Long> {
+        fun lastMsgFor(convId: String): Pair<String?, Long> {
             readableDatabase.rawQuery(
                 "SELECT body, timestamp_ms FROM messages WHERE conversation_id = ? ORDER BY timestamp_ms DESC LIMIT 1",
                 arrayOf(convId)
             ).use { c ->
                 if (c.moveToFirst()) return c.getString(0) to c.getLong(1)
             }
-            return "Нет сообщений" to 0L
+            return null to 0L
         }
 
         fun unreadFor(convId: String): Int {
@@ -529,58 +581,7 @@ class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superap
             }
         }
 
-        val (airLast, airTs) = lastMsgFor("#airmesh")
-        result.add(
-            ChatConversationSummary(
-                conversationId = "#airmesh",
-                title = "Эфир Поблизости (#airmesh)",
-                subtitle = "Открытый радиоканал • ${livePeers.size} узлов рядом",
-                lastMessage = airLast,
-                lastTimestampMs = airTs,
-                unreadCount = unreadFor("#airmesh"),
-                accentColor = Theme.accentCyan,
-                glyph = "📡",
-                isChannel = true,
-                isOnlineNearby = livePeers.isNotEmpty(),
-                hops = 1
-            )
-        )
-
-        val (sosLast, sosTs) = lastMsgFor("#sos")
-        result.add(
-            ChatConversationSummary(
-                conversationId = "#sos",
-                title = "Экстренный маяк (#sos)",
-                subtitle = "Приоритетная ретрансляция до 6 переходов",
-                lastMessage = if (sosTs == 0L) "Канал экстренных оповещений без связи" else sosLast,
-                lastTimestampMs = sosTs,
-                unreadCount = unreadFor("#sos"),
-                accentColor = Theme.accentCoral,
-                glyph = "🆘",
-                isChannel = true,
-                isOnlineNearby = true,
-                hops = 0
-            )
-        )
-
-        val (notesLast, notesTs) = lastMsgFor("notes")
-        result.add(
-            ChatConversationSummary(
-                conversationId = "notes",
-                title = "Избранное (Локальный сейф)",
-                subtitle = "Зашифрованные офлайн-заметки",
-                lastMessage = notesLast,
-                lastTimestampMs = notesTs,
-                unreadCount = 0,
-                accentColor = Theme.accentAmber,
-                glyph = "🔐",
-                isChannel = false,
-                isOnlineNearby = true,
-                hops = 0
-            )
-        )
-
-        // Collect all peer conversation IDs from contacts, livePeers, and message history
+        // Collect all peer conversation IDs first (real peers, contacts, and active DMs)
         val peerIds = linkedSetOf<String>()
         peerIds.addAll(livePeers.keys)
         peerIds.addAll(contactsMap.keys)
@@ -602,25 +603,81 @@ class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superap
             val title = live?.displayName ?: contact?.displayName ?: pid
             val sub = when {
                 live != null -> "${live.transport} • ~${"%.1f".format(live.distanceMeters)} м • ${live.hops} пер."
-                contact != null -> "${contact.handle} • Store & Forward"
-                else -> "$pid • Офлайн-очередь AirMesh"
+                contact != null -> "${contact.handle} • ECDH E2EE"
+                else -> "$pid • Очередь Store & Forward"
             }
             result.add(
                 ChatConversationSummary(
                     conversationId = pid,
                     title = title,
                     subtitle = sub,
-                    lastMessage = lastBody,
+                    lastMessage = lastBody ?: "Начните защищённый диалог",
                     lastTimestampMs = if (lastTs > 0L) lastTs else (live?.lastSeenMs ?: contact?.lastSeenMs ?: 0L),
                     unreadCount = unreadFor(pid),
                     accentColor = Theme.avatarPalette[(pid.hashCode() and 0x7FFFFFFF) % Theme.avatarPalette.size],
-                    glyph = title.trim().take(1).uppercase().ifBlank { "У" },
+                    iconRes = 0,
+                    initials = Theme.initialsFor(title),
                     isChannel = false,
                     isOnlineNearby = live != null,
                     hops = live?.hops ?: 1
                 )
             )
         }
+
+        val (airLast, airTs) = lastMsgFor("#airmesh")
+        result.add(
+            ChatConversationSummary(
+                conversationId = "#airmesh",
+                title = "Общий радиоэфир (#airmesh)",
+                subtitle = "Локальный канал • ${livePeers.size} узлов в радиусе",
+                lastMessage = airLast ?: "Широковещательный канал для устройств рядом",
+                lastTimestampMs = airTs,
+                unreadCount = unreadFor("#airmesh"),
+                accentColor = Theme.brand,
+                iconRes = R.drawable.ic_radar,
+                initials = "",
+                isChannel = true,
+                isOnlineNearby = livePeers.isNotEmpty(),
+                hops = 1
+            )
+        )
+
+        val (notesLast, notesTs) = lastMsgFor("notes")
+        result.add(
+            ChatConversationSummary(
+                conversationId = "notes",
+                title = "Избранное",
+                subtitle = "Личное локальное хранилище AES-256-GCM",
+                lastMessage = notesLast ?: "Личные заметки, ключи и координаты",
+                lastTimestampMs = notesTs,
+                unreadCount = 0,
+                accentColor = 0xFF0F766E.toInt(),
+                iconRes = R.drawable.ic_lock,
+                initials = "",
+                isChannel = false,
+                isOnlineNearby = true,
+                hops = 0
+            )
+        )
+
+        val (sosLast, sosTs) = lastMsgFor("#sos")
+        result.add(
+            ChatConversationSummary(
+                conversationId = "#sos",
+                title = "Экстренный канал (#sos)",
+                subtitle = "Приоритетная ретрансляция до 6 переходов",
+                lastMessage = sosLast ?: "Экстренные оповещения при отсутствии связи",
+                lastTimestampMs = sosTs,
+                unreadCount = unreadFor("#sos"),
+                accentColor = Theme.accentCoral,
+                iconRes = R.drawable.ic_alert,
+                initials = "",
+                isChannel = true,
+                isOnlineNearby = true,
+                hops = 0
+            )
+        )
+
         return result
     }
 
@@ -672,7 +729,27 @@ class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superap
         )
     }
 
-    // --- Teron Mail ---
+    // --- Teron Mail & IMAP/SMTP Account ---
+    fun saveMailAccountConfig(cfg: MailAccountConfig) {
+        putKv("mail_email", cfg.email.trim())
+        putKv("mail_password", cfg.password)
+        putKv("mail_sender_name", cfg.senderName.trim())
+        putKv("mail_imap_host", cfg.imapHost.trim())
+        putKv("mail_imap_port", cfg.imapPort.toString())
+        putKv("mail_smtp_host", cfg.smtpHost.trim())
+        putKv("mail_smtp_port", cfg.smtpPort.toString())
+    }
+
+    fun getMailAccountConfig(): MailAccountConfig = MailAccountConfig(
+        email = getKv("mail_email", ""),
+        password = getKv("mail_password", ""),
+        senderName = getKv("mail_sender_name", getProfile().displayName),
+        imapHost = getKv("mail_imap_host", ""),
+        imapPort = getKv("mail_imap_port", "993").toIntOrNull() ?: 993,
+        smtpHost = getKv("mail_smtp_host", ""),
+        smtpPort = getKv("mail_smtp_port", "465").toIntOrNull() ?: 465
+    )
+
     fun insertMailIfNew(
         packetId: String,
         folder: String,
@@ -796,7 +873,7 @@ class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superap
         }
     }
 
-    // --- Hanzi Dojo (Associative Chinese Learning) ---
+    // --- Hanzi Progress ---
     fun getHanziMasteryMap(): Map<Int, Int> {
         val map = mutableMapOf<Int, Int>()
         readableDatabase.rawQuery("SELECT card_id, mastery_level FROM hanzi_progress", null).use { c ->
@@ -815,19 +892,51 @@ class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superap
         }, SQLiteDatabase.CONFLICT_REPLACE)
     }
 
-    // --- TeronPay Crypto Wallet ---
+    // --- Real Multi-Chain Crypto Wallet ---
+    private fun iconForAsset(assetKey: String): Int = when (assetKey) {
+        "BTC" -> R.drawable.ic_btc
+        "ETH" -> R.drawable.ic_eth
+        "TRX" -> R.drawable.ic_trx
+        else -> R.drawable.ic_usdt
+    }
+
     fun getWalletBalances(): List<WalletBalance> {
+        val me = getProfile()
         val out = mutableListOf<WalletBalance>()
-        readableDatabase.rawQuery("SELECT * FROM wallet_balances", null).use { c ->
+        readableDatabase.rawQuery(
+            """
+            SELECT * FROM wallet_balances
+            ORDER CASE asset_key
+                WHEN 'USDT_TRC20' THEN 1
+                WHEN 'USDT_ERC20' THEN 2
+                WHEN 'BTC' THEN 3
+                WHEN 'ETH' THEN 4
+                WHEN 'TRX' THEN 5
+                ELSE 6
+            END
+            """.trimIndent().replace("ORDER CASE", "ORDER BY CASE"),
+            null
+        ).use { c ->
             while (c.moveToNext()) {
+                val key = c.getString(c.getColumnIndexOrThrow("asset_key"))
+                val addr = when (key) {
+                    "BTC" -> me.btcAddress
+                    "TRX", "USDT_TRC20" -> me.trxAddress
+                    else -> me.walletAddress
+                }
                 out.add(
                     WalletBalance(
+                        assetKey = key,
                         symbol = c.getString(c.getColumnIndexOrThrow("symbol")),
+                        networkLabel = c.getString(c.getColumnIndexOrThrow("network_label")),
                         name = c.getString(c.getColumnIndexOrThrow("name")),
+                        address = addr,
                         balance = c.getDouble(c.getColumnIndexOrThrow("balance")),
+                        rateUsd = c.getDouble(c.getColumnIndexOrThrow("rate_usd")),
                         rateRub = c.getDouble(c.getColumnIndexOrThrow("rate_rub")),
                         accentColor = c.getInt(c.getColumnIndexOrThrow("accent_color")),
-                        glyph = c.getString(c.getColumnIndexOrThrow("glyph"))
+                        iconRes = iconForAsset(key),
+                        decimalsDisplay = c.getInt(c.getColumnIndexOrThrow("decimals_display"))
                     )
                 )
             }
@@ -835,21 +944,85 @@ class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superap
         return out
     }
 
+    fun updateChainBalance(assetKey: String, balance: Double) {
+        writableDatabase.update(
+            "wallet_balances",
+            ContentValues().apply { put("balance", balance.coerceAtLeast(0.0)) },
+            "asset_key = ?",
+            arrayOf(assetKey)
+        )
+    }
+
+    fun updateMarketRates(ratesUsdBySymbol: Map<String, Double>, usdToRub: Double) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            for ((sym, usd) in ratesUsdBySymbol) {
+                if (usd <= 0.0) continue
+                val rub = if (usdToRub > 0.0) usd * usdToRub else 0.0
+                db.update(
+                    "wallet_balances",
+                    ContentValues().apply {
+                        put("rate_usd", usd)
+                        if (rub > 0.0) put("rate_rub", rub)
+                    },
+                    "symbol = ?",
+                    arrayOf(sym)
+                )
+            }
+            putKv("wallet_rates_ts", System.currentTimeMillis().toString())
+            if (usdToRub > 0.0) putKv("usd_rub", usdToRub.toString())
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    fun upsertWalletTransaction(
+        txHash: String,
+        symbol: String,
+        network: String,
+        amount: Double,
+        counterpartyName: String,
+        counterpartyAddress: String,
+        isIncoming: Boolean,
+        memo: String,
+        status: String,
+        viaAirMesh: Boolean,
+        timestampMs: Long
+    ) {
+        if (txHash.isBlank() || amount <= 0.0) return
+        writableDatabase.insertWithOnConflict("wallet_txs", null, ContentValues().apply {
+            put("tx_hash", txHash)
+            put("symbol", symbol)
+            put("network", network)
+            put("amount", amount)
+            put("counterparty_name", counterpartyName)
+            put("counterparty_address", counterpartyAddress)
+            put("is_incoming", if (isIncoming) 1 else 0)
+            put("memo", memo)
+            put("status", status)
+            put("via_airmesh", if (viaAirMesh) 1 else 0)
+            put("timestamp_ms", timestampMs)
+        }, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
     fun getWalletTransactions(): List<WalletTx> {
         val out = mutableListOf<WalletTx>()
-        readableDatabase.rawQuery("SELECT * FROM wallet_txs ORDER BY timestamp_ms DESC", null).use { c ->
+        readableDatabase.rawQuery("SELECT * FROM wallet_txs ORDER BY timestamp_ms DESC LIMIT 60", null).use { c ->
             while (c.moveToNext()) {
                 out.add(
                     WalletTx(
                         id = c.getLong(c.getColumnIndexOrThrow("id")),
                         txHash = c.getString(c.getColumnIndexOrThrow("tx_hash")),
                         symbol = c.getString(c.getColumnIndexOrThrow("symbol")),
+                        network = c.getString(c.getColumnIndexOrThrow("network")),
                         amount = c.getDouble(c.getColumnIndexOrThrow("amount")),
                         counterpartyName = c.getString(c.getColumnIndexOrThrow("counterparty_name")),
                         counterpartyAddress = c.getString(c.getColumnIndexOrThrow("counterparty_address")),
                         isIncoming = c.getInt(c.getColumnIndexOrThrow("is_incoming")) == 1,
                         memo = c.getString(c.getColumnIndexOrThrow("memo")),
-                        signatureHex = c.getString(c.getColumnIndexOrThrow("signature_hex")),
+                        status = c.getString(c.getColumnIndexOrThrow("status")),
                         viaAirMesh = c.getInt(c.getColumnIndexOrThrow("via_airmesh")) == 1,
                         timestampMs = c.getLong(c.getColumnIndexOrThrow("timestamp_ms"))
                     )
@@ -857,54 +1030,6 @@ class TeronDatabase(context: Context) : SQLiteOpenHelper(context, "teron_superap
             }
         }
         return out
-    }
-
-    fun recordWalletTransfer(
-        txHash: String,
-        symbol: String,
-        amount: Double,
-        counterpartyName: String,
-        counterpartyAddress: String,
-        isIncoming: Boolean,
-        memo: String,
-        signatureHex: String,
-        viaAirMesh: Boolean
-    ): Boolean {
-        if (amount <= 0.0) return false
-        val db = writableDatabase
-        db.beginTransaction()
-        try {
-            val existing = db.rawQuery("SELECT 1 FROM wallet_txs WHERE tx_hash = ?", arrayOf(txHash)).use { it.moveToFirst() }
-            if (existing) {
-                db.endTransaction()
-                return false
-            }
-            val curBal = db.rawQuery("SELECT balance FROM wallet_balances WHERE symbol = ?", arrayOf(symbol)).use {
-                if (it.moveToFirst()) it.getDouble(0) else 0.0
-            }
-            if (!isIncoming && curBal < amount) {
-                db.endTransaction()
-                return false
-            }
-            val newBal = if (isIncoming) curBal + amount else curBal - amount
-            db.update("wallet_balances", ContentValues().apply { put("balance", newBal) }, "symbol = ?", arrayOf(symbol))
-            db.insert("wallet_txs", null, ContentValues().apply {
-                put("tx_hash", txHash)
-                put("symbol", symbol)
-                put("amount", amount)
-                put("counterparty_name", counterpartyName)
-                put("counterparty_address", counterpartyAddress)
-                put("is_incoming", if (isIncoming) 1 else 0)
-                put("memo", memo)
-                put("signature_hex", signatureHex)
-                put("via_airmesh", if (viaAirMesh) 1 else 0)
-                put("timestamp_ms", System.currentTimeMillis())
-            })
-            db.setTransactionSuccessful()
-            return true
-        } finally {
-            db.endTransaction()
-        }
     }
 
     fun putKv(key: String, value: String) {

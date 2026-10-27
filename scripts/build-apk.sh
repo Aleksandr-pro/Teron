@@ -49,6 +49,7 @@ PY
 echo "==> [2/5] Compiling native Kotlin sources with kotlinc..."
 KT_SOURCES=$(find "$SRC_DIR" -name "*.kt" | sort)
 "$TC/npm/node_modules/kotlin-compiler/bin/kotlinc" \
+  -J-Xmx2048m \
   $KT_SOURCES \
   "$BUILD_DIR/R.kt" \
   -classpath "$TC/lib/android-34.jar" \

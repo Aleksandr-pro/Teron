@@ -194,11 +194,13 @@ class TeronAudioEngine(
 
         val prevKey = currentTrack?.uriOrPath
         tracks.clear()
-        tracks.addAll(builtIn)
         tracks.addAll(localTracks)
+        tracks.addAll(builtIn)
         if (prevKey != null) {
             val idx = tracks.indexOfFirst { it.uriOrPath == prevKey }
             if (idx >= 0) currentIndex = idx
+        } else {
+            currentIndex = 0
         }
         notifyChanged()
     }

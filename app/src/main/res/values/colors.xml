@@ -1,8 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="teron_bg_dark">#090D16</color>
-    <color name="teron_surface_dark">#12192A</color>
-    <color name="teron_accent_cyan">#00E5FF</color>
-    <color name="teron_accent_indigo">#6C5CE7</color>
-    <color name="teron_accent_amber">#FFB300</color>
+    <color name="teron_bg">#0B0D11</color>
+    <color name="teron_surface">#151922</color>
+    <color name="teron_brand">#2563EB</color>
 </resources>
