@@ -1043,7 +1043,7 @@ class TeronMeshEngine(
                             transport = incomingTransport,
                             hopCount = hopsHere,
                             viaPath = fullPath,
-                            deliveryState = "ECDSA ✓ • $hopsHere пер.",
+                            deliveryState = "ECDSA • $hopsHere пер.",
                             isRead = false
                         )
                         notifyDelivered("${pkt.senderName} ($chId): ${plain.take(40)}")
@@ -1071,7 +1071,7 @@ class TeronMeshEngine(
                                 transport = incomingTransport,
                                 hopCount = hopsHere,
                                 viaPath = fullPath,
-                                deliveryState = "E2EE ECDH ✓ • $hopsHere пер.",
+                                deliveryState = "E2EE ECDH • $hopsHere пер.",
                                 isRead = false
                             )
                             sendDeliveryAck(pkt.packetId, pkt.senderNodeId, hopsHere)
@@ -1082,7 +1082,7 @@ class TeronMeshEngine(
                 "ACK" -> {
                     if (pkt.targetNodeId == me.nodeId) {
                         val origId = pkt.metaSubject
-                        db.updateMessageDeliveryState(origId, "Доставлено адресату ✓✓ (${pkt.hopCount + 1} пер.)")
+                        db.updateMessageDeliveryState(origId, "Доставлено адресату (${pkt.hopCount + 1} пер.)")
                         db.markRelayPacketDelivered(origId)
                         db.promoteMailOutboxToSent(origId)
                         logEvent("Подтверждение доставки ACK от ${pkt.senderName}")
@@ -1123,22 +1123,29 @@ class TeronMeshEngine(
                         val toTarget = tx.optString("to", "")
                         if (toTarget.equals(me.nodeId, ignoreCase = true) ||
                             toTarget.equals(me.walletAddress, ignoreCase = true) ||
+                            toTarget.equals(me.trxAddress, ignoreCase = true) ||
+                            toTarget.equals(me.btcAddress, ignoreCase = true) ||
                             toTarget.equals(me.handle, ignoreCase = true)
                         ) {
                             val amt = tx.optDouble("amount", 0.0)
-                            val sym = tx.optString("symbol", "TRN")
-                            val ok = db.recordWalletTransfer(
-                                txHash = tx.optString("txHash"),
-                                symbol = sym,
-                                amount = amt,
-                                counterpartyName = pkt.senderName,
-                                counterpartyAddress = tx.optString("fromWallet"),
-                                isIncoming = true,
-                                memo = tx.optString("memo", "P2P AirMesh перевод"),
-                                signatureHex = tx.optString("sig", ""),
-                                viaAirMesh = true
-                            )
-                            if (ok) notifyDelivered("Получен перевод +$amt $sym от ${pkt.senderName}")
+                            val sym = tx.optString("symbol", "USDT")
+                            val txHash = tx.optString("txHash", "")
+                            if (amt > 0.0 && txHash.isNotBlank()) {
+                                db.upsertWalletTransaction(
+                                    txHash = txHash,
+                                    symbol = sym,
+                                    network = "AirMesh ECDSA",
+                                    amount = amt,
+                                    counterpartyName = pkt.senderName,
+                                    counterpartyAddress = tx.optString("fromWallet"),
+                                    isIncoming = true,
+                                    memo = tx.optString("memo", "Подписанный P2P-чек AirMesh"),
+                                    status = "Подписан ECDSA",
+                                    viaAirMesh = true,
+                                    timestampMs = pkt.createdAtMs
+                                )
+                                notifyDelivered("Получен подписанный чек $amt $sym от ${pkt.senderName}")
+                            }
                         }
                     }
                 }
@@ -1188,74 +1195,21 @@ class TeronMeshEngine(
         sendFrameToAllWifiPeers(json)
     }
 
-    // =========================================================================
-    // 4. SINGLE-DEVICE CRYPTOGRAPHIC 4-HOP RELAY DIAGNOSTIC LAB
-    // =========================================================================
-    fun runMultiHopFieldSimulation() {
-        ioPool.execute {
-            val me = db.getProfile()
-            val sender = TeronCrypto.generateIdentity()
-            val relay1 = "TRN-A41B90E2"
-            val relay2 = "TRN-7C08D51F"
-
-            livePeers[relay2] = MeshPeer(
-                nodeId = relay2,
-                displayName = "Ретранслятор «Сопка»",
-                handle = "sopka@teron.mesh",
-                publicKeyB64 = sender.publicKeyB64,
-                transport = "BLE Mesh (Эстафета)",
-                rssi = -76,
-                distanceMeters = 58.4,
-                hops = 1,
-                ipAddress = null,
-                bleAddress = "AA:BB:CC:11:22:33",
-                lastSeenMs = System.currentTimeMillis(),
-                isTrustedContact = false
-            )
-            livePeers[sender.nodeId] = MeshPeer(
-                nodeId = sender.nodeId,
-                displayName = "Группа «Тайга-Север»",
-                handle = "taiga@teron.mesh",
-                publicKeyB64 = sender.publicKeyB64,
-                transport = "AirMesh • 3 перехода",
-                rssi = -88,
-                distanceMeters = 640.0,
-                hops = 3,
-                ipAddress = null,
-                bleAddress = null,
-                lastSeenMs = System.currentTimeMillis(),
-                isTrustedContact = true
-            )
-            logEvent("Полигон: узел ${sender.nodeId} (640 м) шифрует пакет ECDH P-256 + AES-256-GCM…")
-            Thread.sleep(500)
-            logEvent("Переход 1/3: ${sender.nodeId} → $relay1 (190 м, BLE -79 дБм)")
-            Thread.sleep(500)
-            logEvent("Переход 2/3: $relay1 → $relay2 (410 м, Store & Forward)")
-            Thread.sleep(500)
-
-            val packetId = "sim-" + UUID.randomUUID().toString()
-            val sharedKey = TeronCrypto.derivePeerKey(sender.privateKeyB64, me.publicKeyB64)
-            val msgText = "Привет из похода! Мобильной сети нет, но пакет прошёл 640 м через 3 смартфона по эстафете AirMesh с проверкой ECDSA."
-            val enc = TeronCrypto.encryptAesGcm(msgText, sharedKey)
-            val sig = TeronCrypto.signData(sender.privateKeyB64, "$packetId:CHAT:${sender.nodeId}:${me.nodeId}:${enc.cipherTextB64}")
-
-            val pkt = MeshRelayPacket(
-                packetId = packetId,
-                kind = "CHAT",
-                senderNodeId = sender.nodeId,
-                senderName = "Группа «Тайга-Север»",
-                senderHandle = "taiga@teron.mesh",
-                senderPubKey = sender.publicKeyB64,
-                targetNodeId = me.nodeId,
-                ttl = 2,
-                hopCount = 2,
-                viaNodes = "${sender.nodeId} → $relay1 → $relay2",
-                cipherTextB64 = enc.cipherTextB64,
-                ivB64 = enc.ivB64,
-                signatureB64 = sig,
-                createdAtMs = System.currentTimeMillis()
-            )
-            processIncomingPacketJson(packetToJson(pkt), "BLE Эстафета (640 м)")
-        }
+    fun getLocalIpv4(): String {
+        try {
+            val ifaces = NetworkInterface.getNetworkInterfaces()
+            while (ifaces != null && ifaces.hasMoreElements()) {
+                val nif = ifaces.nextElement()
+                if (!nif.isUp || nif.isLoopback) continue
+                val addrs = nif.inetAddresses
+                while (addrs.hasMoreElements()) {
+                    val a = addrs.nextElement()
+                    if (a is Inet4Address && !a.isLoopbackAddress) {
+                        return a.hostAddress ?: ""
+                    }
+                }
+            }
+        } catch (_: Throwable) {}
+        return "Нет LAN IP"
     }
 }

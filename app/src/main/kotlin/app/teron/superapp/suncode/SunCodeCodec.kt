@@ -3,14 +3,14 @@ package app.teron.superapp.suncode
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.RectF
-import android.graphics.Shader
 import android.graphics.Typeface
 import android.net.Uri
+import app.teron.superapp.core.TeronCrypto
 import app.teron.superapp.core.Theme
 import app.teron.superapp.core.UserProfile
+import app.teron.superapp.ui.Components
 import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
 import java.util.zip.CRC32
@@ -56,16 +56,13 @@ object SunCodeCodec {
         }
     }
 
-    /**
-     * Generates 64 deterministic radial ray heights (0..3) with 4 cardinal anchor rays.
-     */
     fun computeRayAmplitudes(nodeId: String, publicKeyB64: String): IntArray {
         val digest = MessageDigest.getInstance("SHA-512")
             .digest("$nodeId::$publicKeyB64".toByteArray(Charsets.UTF_8))
         val rays = IntArray(64)
         for (i in 0 until 64) {
             if (i % 16 == 0) {
-                rays[i] = 4 // Cardinal sync ray
+                rays[i] = 4 // Cardinal calibration anchor
             } else {
                 rays[i] = ((digest[i].toInt() and 0xFF) % 4)
             }
@@ -74,8 +71,8 @@ object SunCodeCodec {
     }
 
     /**
-     * Renders a crisp shareable PNG card and embeds a lossless PNG tEXt chunk ("TeronSunCode")
-     * so importing the PNG image in another Teron phone decodes the full ECDH public key!
+     * Renders a crisp architectural PNG card (Graphite Carbon + Cobalt Blue) and embeds
+     * a lossless PNG tEXt chunk ("TeronSunCode") containing the signed contact URI.
      */
     fun renderShareCardPng(profile: UserProfile): ByteArray {
         val w = 900
@@ -83,59 +80,52 @@ object SunCodeCodec {
         val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
 
-        val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            shader = LinearGradient(
-                0f, 0f, w.toFloat(), h.toFloat(),
-                intArrayOf(0xFF080C16.toInt(), 0xFF111B33.toInt(), 0xFF0B1020.toInt()),
-                null,
-                Shader.TileMode.CLAMP
-            )
-        }
+        val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF0B0D11.toInt() }
         c.drawRect(0f, 0f, w.toFloat(), h.toFloat(), bgPaint)
 
-        // Outer card border
+        val cardPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF151922.toInt() }
+        val cardRect = RectF(44f, 44f, w - 44f, h - 44f)
+        c.drawRoundRect(cardRect, 48f, 48f, cardPaint)
+
         val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
-            strokeWidth = 3f
-            color = 0xFF243B6B.toInt()
+            strokeWidth = 2.5f
+            color = 0xFF262D3D.toInt()
         }
-        c.drawRoundRect(RectF(36f, 36f, w - 36f, h - 36f), 54f, 54f, borderPaint)
+        c.drawRoundRect(cardRect, 48f, 48f, borderPaint)
 
-        // Header title
         val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
-            textSize = 42f
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            color = 0xFFF3F5F8.toInt()
+            textSize = 40f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             textAlign = Paint.Align.CENTER
         }
-        c.drawText("Ваш SunCode • Teron", w / 2f, 125f, titlePaint)
+        c.drawText("Teron • Карточка контакта", w / 2f, 132f, titlePaint)
 
         val subPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0xFF94A3B8.toInt()
-            textSize = 26f
+            color = 0xFF949EAE.toInt()
+            textSize = 24f
             textAlign = Paint.Align.CENTER
         }
-        c.drawText("Наведите камеру или импортируйте карточку в Teron", w / 2f, 170f, subPaint)
+        c.drawText("Импортируйте PNG-карточку или отсканируйте код в Teron", w / 2f, 176f, subPaint)
 
-        // Draw SunCode radial rays + central squircle
         val cx = w / 2f
         val cy = 530f
-        drawSunCodeGraphic(c, cx, cy, 275f, profile, phase = 0f)
+        drawSunCodeGraphic(c, cx, cy, 270f, profile, phase = 0f)
 
-        // Name & Handle
-        titlePaint.textSize = 46f
+        titlePaint.textSize = 44f
         c.drawText(profile.displayName, cx, 895f, titlePaint)
 
-        val cyanPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Theme.accentCyan
-            textSize = 30f
-            typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+        val monoPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFF3B82F6.toInt()
+            textSize = 28f
+            typeface = Typeface.MONOSPACE
             textAlign = Paint.Align.CENTER
         }
-        c.drawText("${profile.handle}  •  ${profile.nodeId}", cx, 950f, cyanPaint)
+        c.drawText("${profile.handle}  •  ${profile.nodeId}", cx, 948f, monoPaint)
 
-        subPaint.textSize = 22f
-        c.drawText("ECDH P-256: ${app.teron.superapp.core.TeronCrypto.fingerprintHex(profile.publicKeyB64)}", cx, 1005f, subPaint)
+        subPaint.textSize = 21f
+        c.drawText("ECDH P-256: ${TeronCrypto.fingerprintHex(profile.publicKeyB64)}", cx, 1002f, subPaint)
 
         val rawPngOut = ByteArrayOutputStream()
         bmp.compress(Bitmap.CompressFormat.PNG, 100, rawPngOut)
@@ -156,34 +146,35 @@ object SunCodeCodec {
         val rayPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
             strokeCap = Paint.Cap.ROUND
-            strokeWidth = (outerRadius * 0.032f).coerceAtLeast(4f)
+            strokeWidth = (outerRadius * 0.028f).coerceAtLeast(3.5f)
         }
 
-        // Subtle ambient glow
-        val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.FILL
-            color = Theme.withAlpha(profile.avatarColor, 38)
+        // Clean geometric reference ring
+        val guidePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 1.5f
+            color = Theme.withAlpha(Theme.border, 140)
         }
-        canvas.drawCircle(cx, cy, outerRadius * 0.92f, glowPaint)
+        canvas.drawCircle(cx, cy, innerR, guidePaint)
 
         for (i in 0 until 64) {
             val angle = (i * (360.0 / 64.0) - 90.0) * Math.PI / 180.0
             val amp = rays[i]
-            val pulse = 1.0f + 0.04f * sin((phase + i * 0.22).toDouble()).toFloat()
+            val pulse = 1.0f + 0.025f * sin((phase + i * 0.2).toDouble()).toFloat()
             val lenFactor = when (amp) {
-                4 -> 0.42f
-                3 -> 0.34f
-                2 -> 0.25f
-                1 -> 0.17f
-                else -> 0.10f
+                4 -> 0.40f
+                3 -> 0.32f
+                2 -> 0.24f
+                1 -> 0.16f
+                else -> 0.09f
             } * pulse
-            val rStart = innerR + outerRadius * 0.05f
+            val rStart = innerR + outerRadius * 0.045f
             val rEnd = rStart + outerRadius * lenFactor
 
             rayPaint.color = when {
-                amp == 4 -> Theme.accentAmber
-                i % 2 == 0 -> Theme.accentCyan
-                else -> 0xFFA78BFA.toInt()
+                amp == 4 -> Theme.brandText
+                i % 2 == 0 -> Theme.brand
+                else -> Theme.withAlpha(Theme.textSecondary, 185)
             }
 
             val x1 = cx + (rStart * cos(angle)).toFloat()
@@ -191,44 +182,34 @@ object SunCodeCodec {
             val x2 = cx + (rEnd * cos(angle)).toFloat()
             val y2 = cy + (rEnd * sin(angle)).toFloat()
             canvas.drawLine(x1, y1, x2, y2, rayPaint)
-
-            if (amp == 4) {
-                val dotP = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Theme.accentAmber }
-                val dx = cx + ((rEnd + outerRadius * 0.04f) * cos(angle)).toFloat()
-                val dy = cy + ((rEnd + outerRadius * 0.04f) * sin(angle)).toFloat()
-                canvas.drawCircle(dx, dy, outerRadius * 0.022f, dotP)
-            }
         }
 
-        // Center Squircle Badge (inspired by SunFlower / SunBurst code design)
-        val boxHalf = innerR * 0.78f
+        // Solid Architectural Center Squircle Monogram (zero neon gradient, zero emoji)
+        val boxHalf = innerR * 0.74f
         val rect = RectF(cx - boxHalf, cy - boxHalf, cx + boxHalf, cy + boxHalf)
         val sqPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            shader = LinearGradient(
-                rect.left, rect.top, rect.right, rect.bottom,
-                intArrayOf(profile.avatarColor, Theme.accentIndigo),
-                null,
-                Shader.TileMode.CLAMP
-            )
+            style = Paint.Style.FILL
+            color = profile.avatarColor
         }
-        canvas.drawRoundRect(rect, boxHalf * 0.44f, boxHalf * 0.44f, sqPaint)
+        canvas.drawRoundRect(rect, boxHalf * 0.42f, boxHalf * 0.42f, sqPaint)
 
         val ringStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
-            strokeWidth = (outerRadius * 0.015f).coerceAtLeast(2.5f)
-            color = 0x88FFFFFF.toInt()
+            strokeWidth = (outerRadius * 0.012f).coerceAtLeast(2f)
+            color = 0x33FFFFFF
         }
-        canvas.drawRoundRect(rect, boxHalf * 0.44f, boxHalf * 0.44f, ringStroke)
+        canvas.drawRoundRect(rect, boxHalf * 0.42f, boxHalf * 0.42f, ringStroke)
 
+        val monogram = Theme.initialsFor(profile.displayName)
         val glyphPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
-            textSize = boxHalf * 0.85f
+            textSize = boxHalf * 0.74f
             textAlign = Paint.Align.CENTER
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
         }
         val fm = glyphPaint.fontMetrics
         val ty = cy - (fm.ascent + fm.descent) / 2f
-        canvas.drawText(profile.avatarGlyph, cx, ty, glyphPaint)
+        canvas.drawText(monogram, cx, ty, glyphPaint)
     }
 
     private fun injectPngTextChunk(pngBytes: ByteArray, keyword: String, text: String): ByteArray {
@@ -240,7 +221,6 @@ object SunCodeCodec {
             update(data)
         }.value.toInt()
 
-        // Insert right before IEND (last 12 bytes of standard PNG)
         val iendOffset = pngBytes.size - 12
         val out = ByteArrayOutputStream(pngBytes.size + data.size + 12)
         out.write(pngBytes, 0, iendOffset)
@@ -259,7 +239,7 @@ object SunCodeCodec {
         val pos = asText.indexOf(marker)
         if (pos >= 0) {
             val start = pos + marker.length
-            val rest = ByteArray( (bytes.size - start).coerceAtMost(2048) )
+            val rest = ByteArray((bytes.size - start).coerceAtMost(2048))
             System.arraycopy(bytes, start, rest, 0, rest.size)
             val utf = String(rest, Charsets.UTF_8)
             val uriEnd = utf.indexOf("IEND").let { if (it > 4) it - 4 else utf.length }

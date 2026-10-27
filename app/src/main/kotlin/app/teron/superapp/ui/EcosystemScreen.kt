@@ -1,103 +1,136 @@
 package app.teron.superapp.ui
 
-import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Color
-import android.speech.tts.TextToSpeech
+import android.graphics.Typeface
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.GridLayout
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import app.teron.superapp.R
 import app.teron.superapp.TeronApp
-import app.teron.superapp.core.HanziCard
 import app.teron.superapp.core.TeronCrypto
 import app.teron.superapp.core.Theme
+import app.teron.superapp.core.WalletBalance
+import app.teron.superapp.crypto.Secp256k1Wallet
 import java.util.Locale
+import java.util.UUID
 
 class EcosystemScreen(
     private val ctx: Context,
     private val app: TeronApp,
     private val onThemeChanged: () -> Unit,
     private val onOpenSunCode: (scanTab: Boolean) -> Unit,
-    private val onRequestAllPermissions: () -> Unit
+    private val onResetToOnboarding: () -> Unit
 ) {
-    // null = Hub, "hanzi", "mahjong", "wallet", "settings"
-    var activeModule: String? = null
+    var activeSubApp = 0 // 0=Wallet, 1=Hanzi, 2=Mahjong, 3=Settings
     private var rootContainer: LinearLayout? = null
-
-    // --- Hanzi Dojo state ---
-    private var hanziIdx: Int = 0
-    private var hanziQuizMode: Boolean = false
-    private var tts: TextToSpeech? = null
-    private var ttsReady = false
-    private var ttsInitialized = false
-
-    // --- Mahjong Blast state ---
-    data class MahjongTile(
-        val slotId: Int,
-        val code: String,
-        val symbol: String,
-        val nameRu: String,
-        val loreRu: String,
-        val color: Int,
-        var matched: Boolean = false
-    )
-    private data class TileSpec(val code: String, val sym: String, val nameRu: String, val lore: String, val color: Int)
-
-    private val tileCatalog = listOf(
-        TileSpec("D_RED", "中", "Красный Дракон (Хунчжун)", "Символ точного попадания в цель, успеха на экзаменах и жизненной энергии в культуре Китая.", Theme.accentCoral),
-        TileSpec("D_GRN", "發", "Зелёный Дракон (Фацай)", "Означает процветание, рост и пожелание достатка («Гунси Фацай»).", Theme.accentEmerald),
-        TileSpec("D_WHT", "白", "Белый Дракон (Байбань)", "Олицетворяет чистоту помыслов, искренность и уважение к родителям.", Theme.accentBlue),
-        TileSpec("W_EAST", "東", "Восточный Ветер (Дун)", "Главный ветер Маджонга: символ весны, рассвета над Тихим океаном и начала пути.", Theme.accentAmber),
-        TileSpec("W_SOUTH", "南", "Южный Ветер (Нань)", "Символ тёплого лета, полуденного солнца и творческого огня.", Theme.accentCoral),
-        TileSpec("W_WEST", "西", "Западный Ветер (Си)", "Символ золотой осени, сбора урожая и мудрого спокойствия.", Theme.accentPurple),
-        TileSpec("B_1", "🎋", "1 Бамбук (Павлин)", "Первая кость масти Бамбука традиционно изображает птицу счастья — воробья или павлина.", Theme.accentEmerald),
-        TileSpec("C_8", "八萬", "8 Тьмы (Восемь тысяч)", "Число 8 (ба) в Китае созвучно богатству и бесконечной гармонии.", Theme.accentAmber),
-        TileSpec("P_9", "九筒", "9 Жемчужин (Небесный круг)", "Девятка в китайской традиции — императорское число полноты неба и земли.", Theme.accentCyan)
+    private val settingsScreen = SettingsScreen(
+        ctx = ctx,
+        app = app,
+        onThemeChanged = onThemeChanged,
+        onOpenSunCode = { onOpenSunCode(false) },
+        onOpenWalletBackup = { showSeedBackupOrImportSheet() },
+        onResetToOnboarding = onResetToOnboarding
     )
 
-    private val mahjongBoard = mutableListOf<MahjongTile>()
-    private var selectedTileSlot: Int? = null
-    private var mahjongScore: Int = 0
-    private var mahjongCombo: Int = 0
-    private var lastCulturalNote: String = "Выберите две одинаковые открытые кости Маджонга (свободные слева или справа в ряду), чтобы открыть культурную историю символа!"
+    // Hanzi Dojo state
+    private data class Lesson(
+        val id: Int,
+        val character: String,
+        val pinyin: String,
+        val meaningRu: String,
+        val visualAssociation: String,
+        val strokesHint: Int
+    )
+    private var currentLessonIdx = 0
+    private var quizMode = false
 
-    private fun ensureTtsInitialized() {
-        if (ttsInitialized) return
-        ttsInitialized = true
-        try {
-            tts = TextToSpeech(ctx.applicationContext) { status ->
-                if (status == TextToSpeech.SUCCESS) {
-                    val res = tts?.setLanguage(Locale.SIMPLIFIED_CHINESE)
-                    ttsReady = res != TextToSpeech.LANG_MISSING_DATA && res != TextToSpeech.LANG_NOT_SUPPORTED
-                }
-            }
-        } catch (_: Throwable) {}
-    }
+    // Mahjong state (pure CJK tile characters, zero emojis)
+    private data class Tile(val id: Int, val glyph: String, val suitColor: Int, var matched: Boolean = false)
+    private var mahjongBoard: MutableList<Tile> = mutableListOf()
+    private var selectedTileId: Int? = null
+    private var mahjongMoves = 0
+    private var mahjongMatches = 0
 
-    fun shutdown() {
-        try { tts?.shutdown() } catch (_: Throwable) {}
+    private val lessons = listOf(
+        Lesson(1, "山", "shān", "Гора", "Три горных пика: центральная вершина возвышается над хребтом", 3),
+        Lesson(2, "水", "shuǐ", "Вода / Поток", "Стремительное русло реки с боковыми водоворотами", 4),
+        Lesson(3, "火", "huǒ", "Огонь", "Языки пламени и разлетающиеся по бокам искры", 4),
+        Lesson(4, "木", "mù", "Дерево", "Ствол с кроной ветвей наверху и корнями в земле", 4),
+        Lesson(5, "日", "rì", "Солнце / День", "Солнечный диск с точкой света посередине", 4),
+        Lesson(6, "月", "yuè", "Луна / Месяц", "Серп растущего полумесяца в ночном небе", 4),
+        Lesson(7, "人", "rén", "Человек", "Шагающий вперёд силуэт на двух точках опоры", 2),
+        Lesson(8, "心", "xīn", "Сердце / Разум", "Контур сердца и три импульса мысли", 4),
+        Lesson(9, "道", "dào", "Путь / Метод", "Движение вперёд с осознанным направлением", 12),
+        Lesson(10, "風", "fēng", "Ветер", "Парус, наполненный воздушным потоком", 9),
+        Lesson(11, "電", "diàn", "Электричество", "Грозовое облако и разряд молнии под дождём", 13),
+        Lesson(12, "龍", "lóng", "Дракон", "Восточный дракон в облаках — символ энергии", 16)
+    )
+
+    init {
+        resetMahjongBoard()
     }
 
     fun openSubArg(arg: String?) {
-        activeModule = arg
+        when (arg) {
+            "wallet" -> activeSubApp = 0
+            "wallet_receive" -> {
+                activeSubApp = 0
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    showReceiveSheet(app.db.getWalletBalances().firstOrNull())
+                }
+            }
+            "hanzi" -> activeSubApp = 1
+            "mahjong" -> activeSubApp = 2
+            "settings" -> activeSubApp = 3
+        }
     }
 
     fun handleBack(): Boolean {
-        if (activeModule != null) {
-            activeModule = null
+        if (activeSubApp != 0) {
+            activeSubApp = 0
             render()
             return true
         }
         return false
+    }
+
+    private fun resetMahjongBoard() {
+        data class Spec(val glyph: String, val color: Int)
+        val specs = listOf(
+            Spec("一", 0xFF3B82F6.toInt()),
+            Spec("二", 0xFF3B82F6.toInt()),
+            Spec("三", 0xFF3B82F6.toInt()),
+            Spec("五", 0xFF10B981.toInt()),
+            Spec("七", 0xFF10B981.toInt()),
+            Spec("九", 0xFF10B981.toInt()),
+            Spec("東", 0xFFF59E0B.toInt()),
+            Spec("北", 0xFFF59E0B.toInt()),
+            Spec("中", 0xFFEF4444.toInt()),
+            Spec("發", 0xFF10B981.toInt()),
+            Spec("白", 0xFF8B95A7.toInt()),
+            Spec("龍", 0xFF6366F1.toInt())
+        )
+        val raw = mutableListOf<Tile>()
+        var nextId = 1
+        for (sp in specs) {
+            raw.add(Tile(nextId++, sp.glyph, sp.color))
+            raw.add(Tile(nextId++, sp.glyph, sp.color))
+        }
+        raw.shuffle()
+        mahjongBoard = raw
+        selectedTileId = null
+        mahjongMoves = 0
+        mahjongMatches = 0
     }
 
     fun build(): View {
@@ -113,57 +146,271 @@ class EcosystemScreen(
     fun render() {
         val root = rootContainer ?: return
         root.removeAllViews()
-        val view = when (activeModule) {
-            "hanzi" -> buildHanziDojoView()
-            "mahjong" -> buildMahjongView()
-            "wallet" -> buildWalletView()
-            "settings" -> SettingsScreen.build(
-                ctx = ctx,
-                app = app,
-                onBack = { activeModule = null; render() },
-                onThemeChanged = onThemeChanged,
-                onOpenSunCode = onOpenSunCode,
-                onRequestAllPermissions = onRequestAllPermissions
-            )
-            else -> buildEcosystemHub()
+
+        // Sub-app Navigation Strip
+        val tabScroll = HorizontalScrollView(ctx).apply {
+            isHorizontalScrollBarEnabled = false
+            setPadding(Theme.dp(ctx, 16), Theme.dp(ctx, 12), Theme.dp(ctx, 16), Theme.dp(ctx, 6))
         }
-        root.addView(view, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        val tabRow = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
+        tabRow.addView(Components.actionChip(ctx, "Кошелёк", activeSubApp == 0, R.drawable.ic_wallet) { activeSubApp = 0; render() })
+        tabRow.addView(Components.actionChip(ctx, "Ханьцзы Додзё", activeSubApp == 1, R.drawable.ic_hanzi) { activeSubApp = 1; render() })
+        tabRow.addView(Components.actionChip(ctx, "Маджонг", activeSubApp == 2, R.drawable.ic_mahjong) { activeSubApp = 2; render() })
+        tabRow.addView(Components.actionChip(ctx, "Настройки", activeSubApp == 3, R.drawable.ic_settings) { activeSubApp = 3; render() })
+        tabScroll.addView(tabRow)
+        root.addView(tabScroll)
+
+        if (activeSubApp == 3) {
+            root.addView(settingsScreen.build().apply {
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+            })
+            return
+        }
+
+        // Header Row for Wallet / Hanzi / Mahjong
+        val top = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(Theme.dp(ctx, 16), Theme.dp(ctx, 6), Theme.dp(ctx, 16), Theme.dp(ctx, 6))
+        }
+        top.addView(TextView(ctx).apply {
+            text = when (activeSubApp) {
+                0 -> "Кошелёк TeronPay"
+                1 -> "Каллиграфия и Ханьцзы"
+                else -> "Пасьянс Маджонг"
+            }
+            setTextColor(Theme.textPrimary)
+            textSize = 21f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        if (activeSubApp == 0) {
+            top.addView(Components.solidIconButton(ctx, R.drawable.ic_refresh, Theme.cardAlt, Theme.textPrimary, 38, 17, 10f) {
+                Toast.makeText(ctx, "Запрос актуальных балансов и курсов из блокчейна…", Toast.LENGTH_SHORT).show()
+                app.walletEngine.refreshAllChains(true)
+            })
+        }
+        root.addView(top)
+
+        val scroll = ScrollView(ctx).apply {
+            isVerticalScrollBarEnabled = false
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+        }
+        val content = when (activeSubApp) {
+            0 -> buildWalletView()
+            1 -> buildHanziDojoView()
+            else -> buildMahjongView()
+        }
+        scroll.addView(content)
+        root.addView(scroll)
     }
 
-    private fun buildEcosystemHub(): View {
-        val scroll = ScrollView(ctx)
+    private fun formatCryptoAmount(asset: WalletBalance): String {
+        return String.format(Locale.US, "%.${asset.decimalsDisplay}f", asset.balance)
+    }
+
+    private fun formatCryptoRaw(symbol: String, amount: Double): String {
+        val dec = when (symbol) {
+            "BTC" -> 6
+            "ETH" -> 5
+            else -> 2
+        }
+        return String.format(Locale.US, "%.${dec}f", amount)
+    }
+
+    // 1. REAL NON-CUSTODIAL MULTI-CHAIN CRYPTO WALLET
+    private fun buildWalletView(): View {
+        val me = app.db.getProfile()
+        val assets = app.db.getWalletBalances()
+        val txs = app.db.getWalletTransactions()
+        val totalRub = assets.sumOf { it.balance * it.rateRub }
+        val totalUsd = assets.sumOf { it.balance * it.rateUsd }
+
         val col = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(Theme.dp(ctx, 16), Theme.dp(ctx, 12), Theme.dp(ctx, 16), Theme.dp(ctx, 24))
+            setPadding(Theme.dp(ctx, 16), Theme.dp(ctx, 4), Theme.dp(ctx, 16), Theme.dp(ctx, 28))
         }
 
-        col.addView(TextView(ctx).apply {
-            text = "Экосистема Teron"
-            setTextColor(Theme.textPrimary)
-            textSize = 22f
-            paint.isFakeBoldText = true
-        })
-        col.addView(TextView(ctx).apply {
-            text = "Встроенные автономные мини-сервисы: обучение, игры, криптокошелёк и управление узлом"
+        val portfolioCard = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            background = Theme.roundedBg(Theme.card, Theme.dp(ctx, 18).toFloat(), Theme.border, Theme.dp(ctx, 1))
+            val p = Theme.dp(ctx, 18)
+            setPadding(p, p, p, p)
+        }
+
+        val topMeta = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        topMeta.addView(TextView(ctx).apply {
+            text = "Некастодиальный портфель (BIP-39)"
             setTextColor(Theme.textSecondary)
-            textSize = 13f
-            setPadding(0, Theme.dp(ctx, 4), 0, Theme.dp(ctx, 14))
+            textSize = 12f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        topMeta.addView(Components.pillBadge(
+            ctx,
+            if (app.walletEngine.isSyncing) "Синхронизация…" else "Mainnet",
+            if (app.walletEngine.isSyncing) Theme.accentAmber else Theme.accentEmerald
+        ))
+        portfolioCard.addView(topMeta)
+
+        portfolioCard.addView(TextView(ctx).apply {
+            text = String.format(Locale.US, "%,.2f ₽", totalRub).replace(',', ' ')
+            setTextColor(Theme.textPrimary)
+            textSize = 30f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            fontFeatureSettings = "tnum"
+            setPadding(0, Theme.dp(ctx, 6), 0, Theme.dp(ctx, 2))
+        })
+        portfolioCard.addView(TextView(ctx).apply {
+            text = String.format(Locale.US, "$%,.2f USD • %s", totalUsd, app.walletEngine.lastSyncStatus)
+            setTextColor(Theme.textMuted)
+            textSize = 11.5f
+            fontFeatureSettings = "tnum"
         })
 
-        fun moduleCard(glyph: String, color: Int, title: String, tag: String, desc: String, modKey: String): View {
-            return LinearLayout(ctx).apply {
-                orientation = LinearLayout.VERTICAL
-                background = Theme.rippleCard(ctx, Theme.card, 20f)
-                val p = Theme.dp(ctx, 16)
+        val btnRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = Theme.dp(ctx, 16)
+            }
+        }
+        btnRow.addView(Components.primaryButton(ctx, "Пополнить", R.drawable.ic_qr) {
+            showReceiveSheet(assets.firstOrNull())
+        }.apply {
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                rightMargin = Theme.dp(ctx, 6)
+            }
+        })
+        btnRow.addView(Components.secondaryButton(ctx, "Отправить", R.drawable.ic_send) {
+            showSendSheet(assets.firstOrNull())
+        }.apply {
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                rightMargin = Theme.dp(ctx, 6)
+            }
+        })
+        btnRow.addView(Components.solidIconButton(ctx, R.drawable.ic_key, Theme.cardAlt, Theme.textPrimary, 42, 18, 12f) {
+            showSeedBackupOrImportSheet()
+        })
+        portfolioCard.addView(btnRow)
+        col.addView(portfolioCard)
+
+        col.addView(Components.sectionHeader(ctx, "Активы и сети"))
+        val assetsGroup = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            background = Theme.roundedBg(Theme.card, Theme.dp(ctx, 16).toFloat(), Theme.border, Theme.dp(ctx, 1))
+        }
+
+        assets.forEachIndexed { idx, a ->
+            val row = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = Theme.rippleSurfaceRow(ctx)
+                val p = Theme.dp(ctx, 14)
                 setPadding(p, p, p, p)
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    bottomMargin = Theme.dp(ctx, 12)
+                setOnClickListener { showAssetDetailSheet(a) }
+            }
+            row.addView(Components.tonalIconBadge(ctx, a.iconRes, a.accentColor, 42, 20, 12f))
+
+            val leftCol = LinearLayout(ctx).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    leftMargin = Theme.dp(ctx, 12)
                 }
-                val top = LinearLayout(ctx).apply {
+            }
+            val titleLine = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            titleLine.addView(TextView(ctx).apply {
+                text = a.name
+                setTextColor(Theme.textPrimary)
+                textSize = 14.5f
+                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            })
+            titleLine.addView(TextView(ctx).apply {
+                text = a.networkLabel
+                setTextColor(Theme.textMuted)
+                textSize = 10.5f
+                background = Theme.roundedBg(Theme.cardAlt, Theme.dp(ctx, 6).toFloat())
+                setPadding(Theme.dp(ctx, 6), Theme.dp(ctx, 2), Theme.dp(ctx, 6), Theme.dp(ctx, 2))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    leftMargin = Theme.dp(ctx, 6)
+                }
+            })
+            leftCol.addView(titleLine)
+
+            leftCol.addView(TextView(ctx).apply {
+                text = if (a.rateUsd > 0.0) {
+                    String.format(Locale.US, "$%,.2f (%,.2f ₽)", a.rateUsd, a.rateRub).replace(',', ' ')
+                } else {
+                    Theme.shortAddress(a.address, 8, 6)
+                }
+                setTextColor(Theme.textSecondary)
+                textSize = 12f
+                fontFeatureSettings = "tnum"
+            })
+            row.addView(leftCol)
+
+            val rightCol = LinearLayout(ctx).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.END
+            }
+            rightCol.addView(TextView(ctx).apply {
+                text = "${formatCryptoAmount(a)} ${a.symbol}"
+                setTextColor(Theme.textPrimary)
+                textSize = 14.5f
+                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                fontFeatureSettings = "tnum"
+            })
+            rightCol.addView(TextView(ctx).apply {
+                text = String.format(Locale.US, "%,.2f ₽", a.balance * a.rateRub).replace(',', ' ')
+                setTextColor(Theme.textMuted)
+                textSize = 12f
+                fontFeatureSettings = "tnum"
+            })
+            row.addView(rightCol)
+
+            assetsGroup.addView(row)
+            if (idx < assets.lastIndex) assetsGroup.addView(Components.divider(ctx, 68))
+        }
+        col.addView(assetsGroup)
+
+        col.addView(Components.sectionHeader(ctx, "История операций"))
+        if (txs.isEmpty()) {
+            col.addView(Components.emptyStateCard(
+                ctx = ctx,
+                iconRes = R.drawable.ic_wallet,
+                title = "Транзакций пока нет",
+                subtitle = "Пополните ваш адрес BTC (${Theme.shortAddress(me.btcAddress, 6, 4)}), ETH (${Theme.shortAddress(me.walletAddress, 6, 4)}) или TRX (${Theme.shortAddress(me.trxAddress, 6, 4)}) — переводы из блокчейна синхронизируются автоматически.",
+                ctaLabel = "Показать QR-код для пополнения",
+                onCtaClick = { showReceiveSheet(assets.firstOrNull()) }
+            ))
+        } else {
+            val txGroup = LinearLayout(ctx).apply {
+                orientation = LinearLayout.VERTICAL
+                background = Theme.roundedBg(Theme.card, Theme.dp(ctx, 16).toFloat(), Theme.border, Theme.dp(ctx, 1))
+            }
+            txs.take(30).forEachIndexed { idx, tx ->
+                val row = LinearLayout(ctx).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
+                    background = Theme.rippleSurfaceRow(ctx)
+                    val p = Theme.dp(ctx, 14)
+                    setPadding(p, p, p, p)
+                    setOnClickListener {
+                        copyText("TX Hash", tx.txHash)
+                        Toast.makeText(ctx, "Хеш транзакции скопирован: ${Theme.shortAddress(tx.txHash, 8, 6)}", Toast.LENGTH_SHORT).show()
+                    }
                 }
-                top.addView(Components.squircleIcon(ctx, glyph, color, 48, 22f))
+                row.addView(Components.tonalIconBadge(
+                    ctx,
+                    if (tx.isIncoming) R.drawable.ic_arrow_down_left else R.drawable.ic_arrow_up_right,
+                    if (tx.isIncoming) Theme.accentEmerald else Theme.brandText,
+                    38, 18, 10f
+                ))
                 val mid = LinearLayout(ctx).apply {
                     orientation = LinearLayout.VERTICAL
                     layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
@@ -171,844 +418,636 @@ class EcosystemScreen(
                     }
                 }
                 mid.addView(TextView(ctx).apply {
-                    text = title
+                    text = "${if (tx.isIncoming) "Входящий" else "Исходящий"} • ${tx.network}"
                     setTextColor(Theme.textPrimary)
-                    textSize = 17f
-                    paint.isFakeBoldText = true
+                    textSize = 13.5f
+                    typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
                 })
                 mid.addView(TextView(ctx).apply {
-                    text = tag
-                    setTextColor(color)
-                    textSize = 12f
-                    paint.isFakeBoldText = true
-                })
-                top.addView(mid)
-                top.addView(Components.pillBadge(ctx, "Открыть →", color))
-                addView(top)
-
-                addView(TextView(ctx).apply {
-                    text = desc
+                    text = "${Theme.shortAddress(tx.counterpartyAddress.ifBlank { tx.counterpartyName }, 7, 5)} • ${Theme.formatDateTime(tx.timestampMs)}"
                     setTextColor(Theme.textSecondary)
-                    textSize = 13f
-                    setPadding(0, Theme.dp(ctx, 10), 0, 0)
+                    textSize = 11.5f
                 })
-                setOnClickListener {
-                    activeModule = modKey
-                    render()
+                row.addView(mid)
+
+                val amtCol = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.END
                 }
+                amtCol.addView(TextView(ctx).apply {
+                    text = "${if (tx.isIncoming) "+" else "-"}${formatCryptoRaw(tx.symbol, tx.amount)} ${tx.symbol}"
+                    setTextColor(if (tx.isIncoming) Theme.accentEmerald else Theme.textPrimary)
+                    textSize = 13.5f
+                    typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                    fontFeatureSettings = "tnum"
+                })
+                amtCol.addView(TextView(ctx).apply {
+                    text = tx.status
+                    setTextColor(Theme.textMuted)
+                    textSize = 11f
+                })
+                row.addView(amtCol)
+                txGroup.addView(row)
+                if (idx < txs.take(30).lastIndex) txGroup.addView(Components.divider(ctx, 64))
             }
+            col.addView(txGroup)
         }
 
-        val mastered = app.db.getHanziMasteryMap().values.count { it >= 3 }
-        col.addView(moduleCard(
-            "🐼", Theme.accentCoral,
-            "Ханьцзы Додзё (Red Panda)",
-            "Изучено уверенно: $mastered / ${hanziDeck.size} иероглифов",
-            "Запоминание китайских иероглифов через яркие визуальные ассоциации, офлайн-озвучка произношения, рисование кистью на сетке 米字格 и умная викторина.",
-            "hanzi"
-        ))
-
-        col.addView(moduleCard(
-            "🀄", Theme.accentEmerald,
-            "Маджонг Культура (Mahjong Blast)",
-            "Рекорд сессии: $mahjongScore очк.",
-            "Классическая логическая игра с подлинными китайскими костями (Бамбук, Драконы, Ветры Востока) и культурными историями каждого символа.",
-            "mahjong"
-        ))
-
-        val totalRub = app.db.getWalletBalances().sumOf { it.balance * it.rateRub }
-        col.addView(moduleCard(
-            "💎", Theme.accentCyan,
-            "TeronPay Кошелёк",
-            "Портфель: ~${"%,.0f".format(Locale("ru"), totalRub)} ₽",
-            "Криптокошелёк с ключами ECDSA, seed-фразой из 12 слов и мгновенными офлайн-переводами между смартфонами через сеть AirMesh.",
-            "wallet"
-        ))
-
-        col.addView(moduleCard(
-            "⚙️", Theme.accentPurple,
-            "Настройки и Профиль",
-            "Узел ${app.db.getProfile().nodeId}",
-            "Настройка имени, почтового адреса @teron.mesh, смена тёмной/светлой темы, ключи безопасности и фоновый демон ретрансляции.",
-            "settings"
-        ))
-
-        scroll.addView(col)
-        return scroll
+        return col
     }
 
-    // =========================================================================
-    // MODULE 1: HANZI DOJO (CHINESE LEARNING BY ASSOCIATIONS + CALLIGRAPHY)
-    // =========================================================================
-    private val hanziDeck = listOf(
-        HanziCard(1, "人", "rén (жэнь)", "Человек", "Две шагающие ноги в профиль — шагающий вперёд человек.", "Ключ #9: Человек", "База", 1, "中国人", "Житель Китая"),
-        HanziCard(2, "木", "mù (му)", "Дерево", "Вертикальный ствол, горизонтальные ветви и расходящиеся вниз корни.", "Ключ #75: Дерево", "Природа", 1, "木头", "Древесина"),
-        HanziCard(3, "林", "lín (линь)", "Роща / Лес", "Два дерева 木 стоят рядом плечом к плечу — получается светлая роща!", "木 + 木", "Природа", 1, "树林", "Лесная роща"),
-        HanziCard(4, "森", "sēn (сэнь)", "Густая тайга", "Целых три дерева 木 пирамидой — непроходимая приморская тайга!", "木 + 木 + 木", "Природа", 2, "森林", "Густой лес / тайга"),
-        HanziCard(5, "火", "huǒ (хо)", "Огонь", "Языки пламени в центре и две летящие по бокам искры костра.", "Ключ #86: Огонь", "Стихии", 1, "火车", "Поезд («огненная повозка»)"),
-        HanziCard(6, "山", "shān (шань)", "Гора / Сопка", "Три горные вершины на горизонте, центральная сопка самая высокая.", "Ключ #46: Гора", "Природа", 1, "火山", "Вулкан («огненная гора»)"),
-        HanziCard(7, "水", "shuǐ (шуй)", "Вода", "Стремительный центральный поток реки и брызги волн по сторонам.", "Ключ #85: Вода", "Стихии", 1, "喝水", "Пить воду"),
-        HanziCard(8, "日", "rì (жи)", "Солнце / День", "Окно на восток с солнечным лучом посередине.", "Ключ #72: Солнце", "Космос", 1, "今日", "Сегодняшний день"),
-        HanziCard(9, "月", "yuè (юэ)", "Луна / Месяц", "Изогнутый серп растущего месяца с двумя облачками на ночном небе.", "Ключ #74: Луна", "Космос", 1, "月亮", "Яркая луна"),
-        HanziCard(10, "明", "míng (мин)", "Ясный / Светлый", "Солнце 日 и Луна 月 светят вместе — максимально светло и ясно!", "日 (солнце) + 月 (луна)", "Мудрость", 1, "明天", "Завтра («светлый день»)"),
-        HanziCard(11, "女", "nǚ (нюй)", "Женщина", "Изящный силуэт танцующей девушки в традиционном поклоне.", "Ключ #38: Женщина", "Люди", 1, "女儿", "Дочь"),
-        HanziCard(12, "子", "zǐ (цзы)", "Ребёнок / Мудрец", "Малыш в пелёнке, радостно раскинувший ручки в стороны.", "Ключ #39: Дитя", "Люди", 1, "孔子", "Конфуций (Учитель Кун)"),
-        HanziCard(13, "好", "hǎo (хао)", "Хорошо / Любить", "Женщина 女 рядом с ребёнком 子 — символ счастья, тепла и добра!", "女 + 子", "Общение", 1, "你好", "Привет! («Тебе добра»)"),
-        HanziCard(14, "安", "ān (ань)", "Спокойствие / Мир", "Женщина 女 под надёжной крышей дома 宀 — в доме царит мир и уют.", "宀 (крыша) + 女", "Гармония", 1, "安全", "Безопасность"),
-        HanziCard(15, "家", "jiā (цзя)", "Дом / Семья", "Крыша 宀, а под ней кабанчик 豕 — в древности достаток в хозяйстве означал крепкую семью!", "宀 (крыша) + 豕", "Быт", 1, "大家", "Все вместе / Семья"),
-        HanziCard(16, "心", "xīn (синь)", "Сердце / Душа", "Чаша сердца и три бьющиеся капли-импульса эмоций.", "Ключ #61: Сердце", "Чувства", 1, "开心", "Радоваться («открыть сердце»)"),
-        HanziCard(17, "友", "yǒu (ю)", "Друг", "Две протянутые друг другу руки в крепком рукопожатии.", "Рука + Рука", "Общение", 1, "朋友", "Верный друг"),
-        HanziCard(18, "信", "xìn (синь)", "Письмо / Доверие", "Человек 亻 стоит рядом со своим Словом 言 — верность слову и весточка-письмо!", "亻 (человек) + 言 (речь)", "Связь", 2, "写信", "Написать письмо"),
-        HanziCard(19, "电", "diàn (дянь)", "Электричество / Связь", "Молния, пробивающая грозовое облако и уходящая хвостом разряда вниз.", "Дождь + Молния", "Технологии", 1, "电话", "Телефон («электрическая речь»)"),
-        HanziCard(20, "海", "hǎi (хай)", "Море / Океан", "Три капли воды 氵 слева + «каждый день» 每 — бескрайнее Японское море, куда текут все реки!", "氵 (вода) + 每", "Приморье", 2, "大海", "Бескрайний океан"),
-        HanziCard(21, "茶", "chá (ча)", "Чай", "Трава 艹 сверху, человек 人 посередине собирает листья с чайного куста 木 снизу!", "艹 + 人 + 木", "Культура", 1, "绿茶", "Зелёный чай"),
-        HanziCard(22, "龙", "lóng (лун)", "Дракон", "Изгибающийся в небесах восточный дракон с гребнем — символ энергии и мудрости.", "Ключ: Дракон", "Культура", 2, "神龙", "Небесный дракон"),
-        HanziCard(23, "道", "dào (дао)", "Путь / Дао", "Голова мудреца 首 на дороге движения 辶 — осознанный жизненный путь.", "辶 (идти) + 首", "Философия", 2, "知道", "Знать («ведать путь»)"),
-        HanziCard(24, "福", "fú (фу)", "Счастье / Благополучие", "Алтарь благословения 礻 слева + полный кувшин под одной крышей над полем 田 — полный достаток!", "礻 + 一 + 口 + 田", "Культура", 2, "幸福", "Счастье")
-    )
-
-    private fun buildHanziDojoView(): View {
-        ensureTtsInitialized()
-        val masteryMap = app.db.getHanziMasteryMap()
-        val card = hanziDeck[hanziIdx.coerceIn(0, hanziDeck.lastIndex)]
-        val stars = masteryMap[card.id] ?: 0
-
-        val scroll = ScrollView(ctx)
-        val col = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(Theme.dp(ctx, 16), Theme.dp(ctx, 12), Theme.dp(ctx, 16), Theme.dp(ctx, 24))
-        }
-
-        // Top nav
-        val top = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        top.addView(TextView(ctx).apply {
-            text = "← Экосистема"
-            setTextColor(Theme.accentCyan)
-            textSize = 14.5f
-            paint.isFakeBoldText = true
-            setOnClickListener { activeModule = null; render() }
-        })
-        top.addView(View(ctx).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) })
-        top.addView(Components.actionChip(ctx, if (hanziQuizMode) "📖 Режим карточек" else "🧠 Викторина", hanziQuizMode, Theme.accentCoral) {
-            hanziQuizMode = !hanziQuizMode
-            render()
-        })
-        col.addView(top)
-
-        col.addView(TextView(ctx).apply {
-            text = "🐼 Ханьцзы Додзё"
-            setTextColor(Theme.textPrimary)
-            textSize = 21f
-            paint.isFakeBoldText = true
-            setPadding(0, Theme.dp(ctx, 8), 0, Theme.dp(ctx, 2))
-        })
-        col.addView(TextView(ctx).apply {
-            text = "Карточка ${hanziIdx + 1} из ${hanziDeck.size} • Категория: ${card.category} • Уровень: ${"★".repeat(stars)}${"☆".repeat(5 - stars)}"
-            setTextColor(Theme.textSecondary)
-            textSize = 12f
-            setPadding(0, 0, 0, Theme.dp(ctx, 12))
-        })
-
-        if (hanziQuizMode) {
-            col.addView(buildHanziQuizCard(card))
-            scroll.addView(col)
-            return scroll
-        }
-
-        // Main Associative Flashcard
-        val flash = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            background = Theme.roundedBg(Theme.card, Theme.dp(ctx, 22).toFloat(), Theme.accentCoral, Theme.dp(ctx, 1))
-            val p = Theme.dp(ctx, 18)
-            setPadding(p, p, p, p)
-        }
-
-        flash.addView(TextView(ctx).apply {
-            text = card.hanzi
-            setTextColor(Theme.textPrimary)
-            textSize = 68f
-            gravity = Gravity.CENTER
-        })
-        flash.addView(TextView(ctx).apply {
-            text = "${card.pinyin}  —  ${card.meaningRu}"
-            setTextColor(Theme.accentAmber)
-            textSize = 19f
-            paint.isFakeBoldText = true
-            gravity = Gravity.CENTER
-            setPadding(0, Theme.dp(ctx, 4), 0, Theme.dp(ctx, 8))
-        })
-
-        // Speak button (offline Android TTS)
-        flash.addView(TextView(ctx).apply {
-            text = "🔊 Произнести по-китайски (${card.hanzi} / ${card.exampleZh})"
-            setTextColor(Color.WHITE)
-            textSize = 13f
-            paint.isFakeBoldText = true
-            background = Theme.rippleButton(ctx, Theme.accentCoral, 12f)
-            setPadding(Theme.dp(ctx, 14), Theme.dp(ctx, 8), Theme.dp(ctx, 14), Theme.dp(ctx, 8))
-            setOnClickListener {
-                if (ttsReady) {
-                    tts?.speak("${card.hanzi}。 ${card.exampleZh}", TextToSpeech.QUEUE_FLUSH, null, "hanzi_${card.id}")
-                } else {
-                    Toast.makeText(ctx, "Пиньинь: ${card.pinyin} (пакет китайского голоса TTS не установлен в системе)", Toast.LENGTH_SHORT).show()
-                }
-            }
-        })
-
-        // Association Box
-        val assocBox = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            background = Theme.roundedBg(Theme.cardAlt, Theme.dp(ctx, 14).toFloat())
-            val p = Theme.dp(ctx, 12)
-            setPadding(p, p, p, p)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = Theme.dp(ctx, 14)
-            }
-        }
-        assocBox.addView(TextView(ctx).apply {
-            text = "💡 Образная ассоциация (${card.radicalHint}):"
-            setTextColor(Theme.accentCyan)
-            textSize = 12.5f
-            paint.isFakeBoldText = true
-        })
-        assocBox.addView(TextView(ctx).apply {
-            text = card.associationRu
-            setTextColor(Theme.textPrimary)
-            textSize = 14f
-            setPadding(0, Theme.dp(ctx, 4), 0, Theme.dp(ctx, 6))
-        })
-        assocBox.addView(TextView(ctx).apply {
-            text = "Пример: ${card.exampleZh} — ${card.exampleRu}"
-            setTextColor(Theme.textSecondary)
-            textSize = 12.5f
-        })
-        flash.addView(assocBox)
-        col.addView(flash)
-
-        // Finger Calligraphy Practice Pad
-        col.addView(Components.sectionHeader(ctx, "✍ ПРАКТИКА КАЛЛИГРАФИИ (НАРИСУЙТЕ ПАЛЬЦЕМ)"))
-        val padCard = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            background = Theme.roundedBg(Theme.card, Theme.dp(ctx, 18).toFloat(), Theme.border, Theme.dp(ctx, 1))
-            val p = Theme.dp(ctx, 12)
-            setPadding(p, p, p, p)
-        }
-        val calPad = CalligraphyPadView(ctx, card.hanzi).apply {
-            layoutParams = LinearLayout.LayoutParams(Theme.dp(ctx, 210), Theme.dp(ctx, 210))
-        }
-        padCard.addView(calPad)
-        padCard.addView(TextView(ctx).apply {
-            text = "Очистить холст"
-            setTextColor(Theme.accentCyan)
-            textSize = 12.5f
-            setPadding(Theme.dp(ctx, 12), Theme.dp(ctx, 8), Theme.dp(ctx, 12), Theme.dp(ctx, 4))
-            setOnClickListener { calPad.clearPad() }
-        })
-        col.addView(padCard)
-
-        // Navigation + Mastery Row
-        val navRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = Theme.dp(ctx, 14)
-            }
-        }
-        navRow.addView(TextView(ctx).apply {
-            text = "← Пред."
-            setTextColor(Theme.textPrimary)
-            gravity = Gravity.CENTER
-            background = Theme.rippleCard(ctx, Theme.cardAlt, 13f)
-            setPadding(Theme.dp(ctx, 12), Theme.dp(ctx, 12), Theme.dp(ctx, 12), Theme.dp(ctx, 12))
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = Theme.dp(ctx, 6) }
-            setOnClickListener {
-                hanziIdx = if (hanziIdx - 1 < 0) hanziDeck.lastIndex else hanziIdx - 1
-                render()
-            }
-        })
-        navRow.addView(TextView(ctx).apply {
-            text = "✓ Запомнил!"
-            setTextColor(Color.WHITE)
-            paint.isFakeBoldText = true
-            gravity = Gravity.CENTER
-            background = Theme.rippleButton(ctx, Theme.accentEmerald, 13f)
-            setPadding(Theme.dp(ctx, 12), Theme.dp(ctx, 12), Theme.dp(ctx, 12), Theme.dp(ctx, 12))
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.3f).apply { rightMargin = Theme.dp(ctx, 6) }
-            setOnClickListener {
-                app.db.updateHanziMastery(card.id, +1)
-                hanziIdx = (hanziIdx + 1) % hanziDeck.size
-                render()
-            }
-        })
-        navRow.addView(TextView(ctx).apply {
-            text = "След. →"
-            setTextColor(Theme.textPrimary)
-            gravity = Gravity.CENTER
-            background = Theme.rippleCard(ctx, Theme.cardAlt, 13f)
-            setPadding(Theme.dp(ctx, 12), Theme.dp(ctx, 12), Theme.dp(ctx, 12), Theme.dp(ctx, 12))
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            setOnClickListener {
-                hanziIdx = (hanziIdx + 1) % hanziDeck.size
-                render()
-            }
-        })
-        col.addView(navRow)
-
-        scroll.addView(col)
-        return scroll
+    private fun copyText(label: String, value: String) {
+        val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        cm.setPrimaryClip(ClipData.newPlainText(label, value))
     }
 
-    private fun buildHanziQuizCard(target: HanziCard): View {
-        val box = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            background = Theme.roundedBg(Theme.card, Theme.dp(ctx, 22).toFloat(), Theme.border, Theme.dp(ctx, 1))
-            val p = Theme.dp(ctx, 20)
-            setPadding(p, p, p, p)
-        }
-        box.addView(TextView(ctx).apply {
-            text = "Что означает этот иероглиф?"
-            setTextColor(Theme.textSecondary)
-            textSize = 14f
-        })
-        box.addView(TextView(ctx).apply {
-            text = target.hanzi
-            setTextColor(Theme.textPrimary)
-            textSize = 72f
-            gravity = Gravity.CENTER
-            setPadding(0, Theme.dp(ctx, 10), 0, Theme.dp(ctx, 14))
-        })
-
-        val distractors = (hanziDeck.filter { it.id != target.id }.shuffled().take(3) + target).shuffled()
-        for (opt in distractors) {
-            box.addView(TextView(ctx).apply {
-                text = "${opt.meaningRu}  •  ${opt.pinyin}"
-                setTextColor(Theme.textPrimary)
-                textSize = 15f
-                paint.isFakeBoldText = true
-                gravity = Gravity.CENTER
-                background = Theme.rippleCard(ctx, Theme.cardAlt, 14f)
-                setPadding(Theme.dp(ctx, 14), Theme.dp(ctx, 13), Theme.dp(ctx, 14), Theme.dp(ctx, 13))
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    bottomMargin = Theme.dp(ctx, 9)
-                }
-                setOnClickListener {
-                    if (opt.id == target.id) {
-                        app.db.updateHanziMastery(target.id, +1)
-                        Toast.makeText(ctx, "Верно! ${target.hanzi} — ${target.meaningRu} ★", Toast.LENGTH_SHORT).show()
-                        hanziIdx = (hanziIdx + 1) % hanziDeck.size
-                        render()
-                    } else {
-                        Toast.makeText(ctx, "Подсказка: ${target.associationRu}", Toast.LENGTH_LONG).show()
-                    }
+    private fun showAssetDetailSheet(asset: WalletBalance) {
+        TeronSheets.showBottomSheet(
+            ctx = ctx,
+            title = "${asset.name} (${asset.symbol})",
+            subtitle = "${asset.networkLabel} • Баланс: ${formatCryptoAmount(asset)} ${asset.symbol}"
+        ) { dlg, col ->
+            col.addView(QrCodeView(ctx, asset.address).apply {
+                val sz = Theme.dp(ctx, 196)
+                layoutParams = LinearLayout.LayoutParams(sz, sz).apply {
+                    gravity = Gravity.CENTER_HORIZONTAL
+                    topMargin = Theme.dp(ctx, 6)
+                    bottomMargin = Theme.dp(ctx, 12)
                 }
             })
+
+            col.addView(TextView(ctx).apply {
+                text = asset.address
+                setTextColor(Theme.textPrimary)
+                textSize = 12.5f
+                typeface = Typeface.MONOSPACE
+                gravity = Gravity.CENTER
+                background = Theme.roundedBg(Theme.card, Theme.dp(ctx, 10).toFloat(), Theme.border, Theme.dp(ctx, 1))
+                val p = Theme.dp(ctx, 12)
+                setPadding(p, p, p, p)
+            })
+
+            val row = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    topMargin = Theme.dp(ctx, 14)
+                }
+            }
+            row.addView(Components.secondaryButton(ctx, "Копировать", R.drawable.ic_copy) {
+                copyText("Address", asset.address)
+                Toast.makeText(ctx, "Адрес скопирован", Toast.LENGTH_SHORT).show()
+            }.apply {
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    rightMargin = Theme.dp(ctx, 6)
+                }
+            })
+            row.addView(Components.primaryButton(ctx, "Отправить", R.drawable.ic_send) {
+                dlg.dismiss()
+                showSendSheet(asset)
+            }.apply {
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    leftMargin = Theme.dp(ctx, 6)
+                }
+            })
+            col.addView(row)
         }
-        return box
     }
 
-    // =========================================================================
-    // MODULE 2: MAHJONG BLAST / CULTURAL SOLITAIRE (36 TILES, 6x6 LAYERED ROWS)
-    // =========================================================================
-    private fun resetMahjongBoard() {
-        mahjongBoard.clear()
-        selectedTileSlot = null
-        mahjongCombo = 0
-        // 9 tile types * 4 tiles each = 36 tiles (6x6 board)
-        val pool = mutableListOf<TileSpec>()
-        for (spec in tileCatalog) {
-            repeat(4) { pool.add(spec) }
-        }
-        pool.shuffle()
-        pool.forEachIndexed { idx, s ->
-            mahjongBoard.add(MahjongTile(idx, s.code, s.sym, s.nameRu, s.lore, s.color, false))
-        }
-    }
+    private fun showReceiveSheet(initial: WalletBalance?) {
+        val assets = app.db.getWalletBalances()
+        if (assets.isEmpty()) return
+        var selected = initial ?: assets.first()
 
-    private fun isTileFreeInRow(slot: Int): Boolean {
-        val t = mahjongBoard.getOrNull(slot) ?: return false
-        if (t.matched) return false
-        val row = slot / 6
-        val col = slot % 6
-        val leftEmpty = (col == 0) || mahjongBoard[row * 6 + (col - 1)].matched
-        val rightEmpty = (col == 5) || mahjongBoard[row * 6 + (col + 1)].matched
-        return leftEmpty || rightEmpty
-    }
+        TeronSheets.showBottomSheet(
+            ctx = ctx,
+            title = "Пополнение кошелька",
+            subtitle = "Выберите сеть и отсканируйте QR-код или скопируйте публичный адрес"
+        ) { _, col ->
+            val container = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
 
-    private fun buildMahjongView(): View {
-        if (mahjongBoard.isEmpty()) resetMahjongBoard()
-        val scroll = ScrollView(ctx)
-        val col = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(Theme.dp(ctx, 16), Theme.dp(ctx, 12), Theme.dp(ctx, 16), Theme.dp(ctx, 24))
-        }
+            fun rebuildReceiveContent() {
+                container.removeAllViews()
+                val chipScroll = HorizontalScrollView(ctx).apply { isHorizontalScrollBarEnabled = false }
+                val chipRow = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
+                for (a in assets) {
+                    val label = "${a.symbol} (${a.networkLabel.substringBefore(" ")})"
+                    chipRow.addView(Components.actionChip(ctx, label, selected.assetKey == a.assetKey) {
+                        selected = a
+                        rebuildReceiveContent()
+                    })
+                }
+                chipScroll.addView(chipRow)
+                container.addView(chipScroll)
 
-        val top = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        top.addView(TextView(ctx).apply {
-            text = "← Экосистема"
-            setTextColor(Theme.accentCyan)
-            textSize = 14.5f
-            paint.isFakeBoldText = true
-            setOnClickListener { activeModule = null; render() }
-        })
-        top.addView(View(ctx).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) })
-        val remaining = mahjongBoard.count { !it.matched }
-        top.addView(Components.pillBadge(ctx, "Очки: $mahjongScore • Костей: $remaining", Theme.accentEmerald))
-        col.addView(top)
+                container.addView(QrCodeView(ctx, selected.address).apply {
+                    val sz = Theme.dp(ctx, 200)
+                    layoutParams = LinearLayout.LayoutParams(sz, sz).apply {
+                        gravity = Gravity.CENTER_HORIZONTAL
+                        topMargin = Theme.dp(ctx, 14)
+                        bottomMargin = Theme.dp(ctx, 12)
+                    }
+                })
 
-        col.addView(TextView(ctx).apply {
-            text = "🀄 Маджонг Культура"
-            setTextColor(Theme.textPrimary)
-            textSize = 21f
-            paint.isFakeBoldText = true
-            setPadding(0, Theme.dp(ctx, 8), 0, Theme.dp(ctx, 8))
-        })
-
-        // 6x6 Mahjong Solitaire Grid
-        val gridCard = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            background = Theme.roundedBg(Theme.card, Theme.dp(ctx, 20).toFloat(), Theme.border, Theme.dp(ctx, 1))
-            val p = Theme.dp(ctx, 10)
-            setPadding(p, p, p, p)
-        }
-
-        val grid = GridLayout(ctx).apply {
-            columnCount = 6
-            rowCount = 6
-        }
-
-        val screenW = ctx.resources.displayMetrics.widthPixels
-        val tileW = ((screenW - Theme.dp(ctx, 84)) / 6).coerceAtLeast(Theme.dp(ctx, 42))
-        val tileH = (tileW * 1.24f).toInt()
-
-        for (slot in 0 until 36) {
-            val tile = mahjongBoard[slot]
-            val free = isTileFreeInRow(slot)
-            val isSelected = selectedTileSlot == slot
-
-            val cell = TextView(ctx).apply {
-                if (tile.matched) {
-                    text = ""
-                    background = Theme.roundedBg(Theme.withAlpha(Theme.border, 28), Theme.dp(ctx, 8).toFloat())
-                } else {
-                    text = tile.symbol
-                    textSize = if (tile.symbol.length > 1) 13.5f else 20f
-                    paint.isFakeBoldText = true
+                container.addView(TextView(ctx).apply {
+                    text = "Отправляйте только активы сети ${selected.networkLabel} на этот адрес:"
+                    setTextColor(Theme.textSecondary)
+                    textSize = 12f
                     gravity = Gravity.CENTER
-                    setTextColor(if (free) tile.color else Theme.textMuted)
-                    val fill = when {
-                        isSelected -> Theme.withAlpha(Theme.accentCyan, 65)
-                        free -> if (Theme.isDark) 0xFF1F2D4D.toInt() else 0xFFFFFFFF.toInt()
-                        else -> if (Theme.isDark) 0xFF0E1526.toInt() else 0xFFE2E8F0.toInt()
+                    setPadding(0, 0, 0, Theme.dp(ctx, 6))
+                })
+
+                container.addView(TextView(ctx).apply {
+                    text = selected.address
+                    setTextColor(Theme.textPrimary)
+                    textSize = 12.5f
+                    typeface = Typeface.MONOSPACE
+                    gravity = Gravity.CENTER
+                    background = Theme.roundedBg(Theme.card, Theme.dp(ctx, 12).toFloat(), Theme.border, Theme.dp(ctx, 1))
+                    val p = Theme.dp(ctx, 12)
+                    setPadding(p, p, p, p)
+                })
+
+                container.addView(Components.primaryButton(ctx, "Копировать адрес", R.drawable.ic_copy) {
+                    copyText(selected.symbol, selected.address)
+                    Toast.makeText(ctx, "Адрес ${selected.networkLabel} скопирован", Toast.LENGTH_SHORT).show()
+                }.apply {
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        topMargin = Theme.dp(ctx, 14)
                     }
-                    val stroke = when {
-                        isSelected -> Theme.accentCyan
-                        free -> Theme.withAlpha(tile.color, 130)
-                        else -> Theme.border
+                })
+            }
+
+            rebuildReceiveContent()
+            col.addView(container)
+        }
+    }
+
+    private fun showSendSheet(initial: WalletBalance?) {
+        val assets = app.db.getWalletBalances()
+        if (assets.isEmpty()) return
+        var selected = initial ?: assets.first()
+        var modeOnChain = true
+
+        TeronSheets.showBottomSheet(
+            ctx = ctx,
+            title = "Перевод средств",
+            subtitle = "Подпись транзакции выполняется локально ключом secp256k1 на вашем устройстве"
+        ) { dlg, col ->
+            val container = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
+
+            fun rebuildSendForm() {
+                container.removeAllViews()
+                val modeRow = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        bottomMargin = Theme.dp(ctx, 10)
                     }
-                    background = Theme.roundedBg(fill, Theme.dp(ctx, 9).toFloat(), stroke, Theme.dp(ctx, if (isSelected) 2f else 1f))
-                    setOnClickListener {
-                        if (!free) {
-                            Toast.makeText(ctx, "Кость зажата соседями слева и справа! Выберите крайнюю кость в ряду.", Toast.LENGTH_SHORT).show()
-                            return@setOnClickListener
+                }
+                modeRow.addView(Components.actionChip(ctx, "Блокчейн Mainnet", modeOnChain, R.drawable.ic_globe) {
+                    modeOnChain = true
+                    rebuildSendForm()
+                })
+                modeRow.addView(Components.actionChip(ctx, "AirMesh (Офлайн чек)", !modeOnChain, R.drawable.ic_mesh) {
+                    modeOnChain = false
+                    rebuildSendForm()
+                })
+                container.addView(modeRow)
+
+                val chipScroll = HorizontalScrollView(ctx).apply {
+                    isHorizontalScrollBarEnabled = false
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        bottomMargin = Theme.dp(ctx, 10)
+                    }
+                }
+                val chipRow = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
+                for (a in assets) {
+                    val label = "${a.symbol} ${a.networkLabel.substringBefore(" ")} (${formatCryptoAmount(a)})"
+                    chipRow.addView(Components.actionChip(ctx, label, selected.assetKey == a.assetKey) {
+                        selected = a
+                        rebuildSendForm()
+                    })
+                }
+                chipScroll.addView(chipRow)
+                container.addView(chipScroll)
+
+                val addrHint = when {
+                    !modeOnChain -> "ID узла AirMesh (например TRN-XXXX)"
+                    selected.assetKey == "BTC" -> "bc1q..."
+                    selected.assetKey == "ETH" || selected.assetKey == "USDT_ERC20" -> "0x..."
+                    else -> "T..."
+                }
+                val toField = Components.labeledInput(ctx, if (modeOnChain) "Адрес получателя (${selected.networkLabel})" else "Получатель в сети AirMesh", addrHint)
+                val amtField = Components.labeledInput(ctx, "Сумма (${selected.symbol})", "0.00")
+                val memoField = Components.labeledInput(ctx, "Комментарий (необязательно)", "")
+                container.addView(toField.container)
+                container.addView(amtField.container)
+                container.addView(memoField.container)
+
+                if (!modeOnChain) {
+                    val peers = app.db.getContacts()
+                    if (peers.isNotEmpty()) {
+                        val peerScroll = HorizontalScrollView(ctx).apply { isHorizontalScrollBarEnabled = false }
+                        val peerRow = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
+                        for (p in peers) {
+                            peerRow.addView(Components.actionChip(ctx, p.displayName, false, R.drawable.ic_user) {
+                                toField.input.setText(p.nodeId)
+                            })
                         }
-                        val prevSlot = selectedTileSlot
-                        if (prevSlot == null || prevSlot == slot) {
-                            selectedTileSlot = if (prevSlot == slot) null else slot
-                            render()
-                        } else {
-                            val prevTile = mahjongBoard[prevSlot]
-                            if (prevTile.code == tile.code) {
-                                prevTile.matched = true
-                                tile.matched = true
-                                selectedTileSlot = null
-                                mahjongCombo++
-                                mahjongScore += 25 * mahjongCombo
-                                lastCulturalNote = "✨ ${tile.nameRu}: ${tile.loreRu}"
-                                if (mahjongBoard.all { it.matched }) {
-                                    lastCulturalNote = "🏆 Победа! Все 36 костей разобраны! Нажмите «Новая партия» для следующего расклада."
-                                }
-                                render()
-                            } else {
-                                mahjongCombo = 0
-                                selectedTileSlot = slot
+                        peerScroll.addView(peerRow)
+                        container.addView(peerScroll)
+                    }
+                }
+
+                container.addView(Components.primaryButton(
+                    ctx,
+                    if (modeOnChain) "Подписать и отправить в блокчейн" else "Подписать чек и отправить в AirMesh",
+                    R.drawable.ic_send
+                ) {
+                    val target = toField.input.text.toString().trim()
+                    val amt = amtField.input.text.toString().replace(',', '.').toDoubleOrNull() ?: 0.0
+                    val memo = memoField.input.text.toString().trim()
+                    if (target.isEmpty() || amt <= 0.0) {
+                        Toast.makeText(ctx, "Проверьте адрес получателя и сумму", Toast.LENGTH_SHORT).show()
+                        return@primaryButton
+                    }
+                    if (modeOnChain) {
+                        Toast.makeText(ctx, "Формирование и подпись транзакции…", Toast.LENGTH_SHORT).show()
+                        app.walletEngine.sendOnChainAsset(selected.assetKey, target, amt, memo) { ok, msg ->
+                            Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show()
+                            if (ok) {
+                                dlg.dismiss()
                                 render()
                             }
                         }
+                    } else {
+                        if (selected.balance < amt) {
+                            Toast.makeText(ctx, "Недостаточно средств на балансе ${selected.symbol}", Toast.LENGTH_SHORT).show()
+                            return@primaryButton
+                        }
+                        val me = app.db.getProfile()
+                        val txHash = "mesh-" + UUID.randomUUID().toString().replace("-", "").take(16)
+                        val sig = TeronCrypto.signData(me.privateKeyB64, "$txHash:${selected.symbol}:$amt:$target")
+                        app.db.updateChainBalance(selected.assetKey, (selected.balance - amt).coerceAtLeast(0.0))
+                        app.db.upsertWalletTransaction(
+                            txHash = txHash,
+                            symbol = selected.symbol,
+                            network = "AirMesh",
+                            amount = amt,
+                            counterpartyName = target,
+                            counterpartyAddress = target,
+                            isIncoming = false,
+                            memo = memo.ifBlank { "Крипто-чек AirMesh" },
+                            status = "Передано в AirMesh",
+                            viaAirMesh = true,
+                            timestampMs = System.currentTimeMillis()
+                        )
+                        app.meshEngine.broadcastSignedCryptoTransfer(txHash, selected.symbol, amt, target, memo, sig)
+                        Toast.makeText(ctx, "Подписанный крипто-чек отправлен в AirMesh", Toast.LENGTH_SHORT).show()
+                        dlg.dismiss()
+                        render()
                     }
+                }.apply {
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        topMargin = Theme.dp(ctx, 8)
+                    }
+                })
+            }
+
+            rebuildSendForm()
+            col.addView(container)
+        }
+    }
+
+    fun showSeedBackupOrImportSheet() {
+        val currentMnemonic = app.db.getProfile().seedPhrase
+        TeronSheets.showBottomSheet(
+            ctx = ctx,
+            title = "Резервная копия кошелька (BIP-39)",
+            subtitle = "Секретная фраза хранится исключительно на этом устройстве. Никому не сообщайте эти слова."
+        ) { dlg, col ->
+            if (currentMnemonic.isNotEmpty()) {
+                val words = currentMnemonic.split(" ")
+                val grid = GridLayout(ctx).apply {
+                    columnCount = 3
+                    background = Theme.roundedBg(Theme.card, Theme.dp(ctx, 14).toFloat(), Theme.border, Theme.dp(ctx, 1))
+                    val p = Theme.dp(ctx, 10)
+                    setPadding(p, p, p, p)
                 }
+                words.forEachIndexed { idx, w ->
+                    grid.addView(TextView(ctx).apply {
+                        text = "${idx + 1}. $w"
+                        setTextColor(Theme.textPrimary)
+                        textSize = 12.5f
+                        typeface = Typeface.MONOSPACE
+                        background = Theme.roundedBg(Theme.cardAlt, Theme.dp(ctx, 8).toFloat())
+                        setPadding(Theme.dp(ctx, 8), Theme.dp(ctx, 6), Theme.dp(ctx, 8), Theme.dp(ctx, 6))
+                        layoutParams = GridLayout.LayoutParams().apply {
+                            width = 0
+                            columnSpec = GridLayout.spec(idx % 3, 1f)
+                            setMargins(Theme.dp(ctx, 4), Theme.dp(ctx, 4), Theme.dp(ctx, 4), Theme.dp(ctx, 4))
+                        }
+                    })
+                }
+                col.addView(grid)
+
+                col.addView(Components.secondaryButton(ctx, "Скопировать фразу", R.drawable.ic_copy) {
+                    copyText("BIP-39 Seed", currentMnemonic)
+                    Toast.makeText(ctx, "Фраза скопирована в буфер обмена", Toast.LENGTH_SHORT).show()
+                }.apply {
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        topMargin = Theme.dp(ctx, 10)
+                        bottomMargin = Theme.dp(ctx, 16)
+                    }
+                })
+            }
+
+            val importField = Components.labeledInput(
+                ctx = ctx,
+                label = "Импортировать другую BIP-39 фразу (12 или 24 слова)",
+                hintText = "Введите слова на английском через пробел",
+                initialValue = "",
+                singleLine = false,
+                minLinesCount = 3
+            )
+            col.addView(importField.container)
+
+            col.addView(Components.primaryButton(ctx, "Восстановить кошелёк из фразы", R.drawable.ic_key) {
+                val norm = Secp256k1Wallet.normalizeMnemonic(importField.input.text.toString())
+                if (!app.db.importWalletSeed(norm)) {
+                    Toast.makeText(ctx, "Некорректная фраза или контрольная сумма BIP-39", Toast.LENGTH_LONG).show()
+                    return@primaryButton
+                }
+                dlg.dismiss()
+                Toast.makeText(ctx, "Кошелёк обновлён. Запрос балансов из блокчейна…", Toast.LENGTH_LONG).show()
+                app.walletEngine.refreshAllChains(true)
+                render()
+            })
+        }
+    }
+
+    // 2. HANZI DOJO (100% EMOJI-FREE)
+    private fun buildHanziDojoView(): View {
+        val lesson = lessons[currentLessonIdx % lessons.size]
+        val masteryMap = app.db.getHanziMasteryMap()
+        val masteredCount = masteryMap.values.count { it > 0 }
+
+        val col = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(Theme.dp(ctx, 16), Theme.dp(ctx, 4), Theme.dp(ctx, 16), Theme.dp(ctx, 24))
+        }
+
+        val headerRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = Theme.dp(ctx, 12)
+            }
+        }
+        headerRow.addView(Components.pillBadge(ctx, "Изучено: $masteredCount / ${lessons.size}", Theme.brandText))
+        headerRow.addView(View(ctx).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) })
+        headerRow.addView(Components.actionChip(ctx, if (quizMode) "К прописям" else "Проверка знаний", quizMode, R.drawable.ic_award) {
+            quizMode = !quizMode
+            render()
+        })
+        col.addView(headerRow)
+
+        if (quizMode) {
+            val card = LinearLayout(ctx).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER_HORIZONTAL
+                background = Theme.roundedBg(Theme.card, Theme.dp(ctx, 18).toFloat(), Theme.border, Theme.dp(ctx, 1))
+                val p = Theme.dp(ctx, 20)
+                setPadding(p, p, p, p)
+            }
+            card.addView(TextView(ctx).apply {
+                text = "Выберите верное значение иероглифа"
+                setTextColor(Theme.textSecondary)
+                textSize = 13f
+            })
+            card.addView(TextView(ctx).apply {
+                text = lesson.character
+                setTextColor(Theme.textPrimary)
+                textSize = 72f
+                gravity = Gravity.CENTER
+                setPadding(0, Theme.dp(ctx, 8), 0, Theme.dp(ctx, 4))
+            })
+            card.addView(TextView(ctx).apply {
+                text = "[ ${lesson.pinyin} ]"
+                setTextColor(Theme.brandText)
+                textSize = 15f
+                setPadding(0, 0, 0, Theme.dp(ctx, 14))
+            })
+
+            val options = (lessons.filter { it.id != lesson.id }.shuffled().take(3) + lesson).shuffled()
+            for (opt in options) {
+                card.addView(Components.secondaryButton(ctx, opt.meaningRu) {
+                    if (opt.id == lesson.id) {
+                        app.db.updateHanziMastery(lesson.id, 1)
+                        Toast.makeText(ctx, "Верно: ${lesson.character} (${lesson.pinyin}) — ${lesson.meaningRu}", Toast.LENGTH_SHORT).show()
+                        currentLessonIdx = (currentLessonIdx + 1) % lessons.size
+                        render()
+                    } else {
+                        Toast.makeText(ctx, "Подсказка: ${lesson.visualAssociation}", Toast.LENGTH_SHORT).show()
+                    }
+                }.apply {
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        bottomMargin = Theme.dp(ctx, 8)
+                    }
+                })
+            }
+            col.addView(card)
+        } else {
+            val card = LinearLayout(ctx).apply {
+                orientation = LinearLayout.VERTICAL
+                background = Theme.roundedBg(Theme.card, Theme.dp(ctx, 18).toFloat(), Theme.border, Theme.dp(ctx, 1))
+                val p = Theme.dp(ctx, 18)
+                setPadding(p, p, p, p)
+            }
+
+            val topInfo = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            topInfo.addView(TextView(ctx).apply {
+                text = "${lesson.character}  •  ${lesson.pinyin}"
+                setTextColor(Theme.textPrimary)
+                textSize = 24f
+                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            })
+            val done = (masteryMap[lesson.id] ?: 0) > 0
+            topInfo.addView(Components.pillBadge(ctx, if (done) "Освоено" else "Черт: ${lesson.strokesHint}", if (done) Theme.accentEmerald else Theme.textSecondary))
+            card.addView(topInfo)
+
+            card.addView(TextView(ctx).apply {
+                text = lesson.meaningRu
+                setTextColor(Theme.brandText)
+                textSize = 16f
+                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                setPadding(0, Theme.dp(ctx, 4), 0, Theme.dp(ctx, 4))
+            })
+            card.addView(TextView(ctx).apply {
+                text = lesson.visualAssociation
+                setTextColor(Theme.textSecondary)
+                textSize = 13f
+                setPadding(0, 0, 0, Theme.dp(ctx, 14))
+            })
+
+            val pad = CalligraphyPadView(ctx, lesson.character).apply {
+                val sz = Theme.dp(ctx, 240)
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, sz)
+            }
+            card.addView(pad)
+
+            val actions = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    topMargin = Theme.dp(ctx, 14)
+                }
+            }
+            actions.addView(Components.secondaryButton(ctx, "Очистить", R.drawable.ic_refresh) {
+                pad.clearPad()
+            }.apply {
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    rightMargin = Theme.dp(ctx, 6)
+                }
+            })
+            actions.addView(Components.primaryButton(ctx, "Засчитать", R.drawable.ic_check) {
+                app.db.updateHanziMastery(lesson.id, 1)
+                currentLessonIdx = (currentLessonIdx + 1) % lessons.size
+                render()
+            }.apply {
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    leftMargin = Theme.dp(ctx, 6)
+                }
+            })
+            card.addView(actions)
+            col.addView(card)
+
+            val navRow = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    topMargin = Theme.dp(ctx, 10)
+                }
+            }
+            navRow.addView(Components.secondaryButton(ctx, "Предыдущий") {
+                currentLessonIdx = (currentLessonIdx - 1 + lessons.size) % lessons.size
+                render()
+            }.apply {
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    rightMargin = Theme.dp(ctx, 6)
+                }
+            })
+            navRow.addView(Components.secondaryButton(ctx, "Следующий") {
+                currentLessonIdx = (currentLessonIdx + 1) % lessons.size
+                render()
+            }.apply {
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    leftMargin = Theme.dp(ctx, 6)
+                }
+            })
+            col.addView(navRow)
+        }
+
+        return col
+    }
+
+    // 3. MAHJONG SOLITAIRE (CLASSIC CJK GLYPHS, ZERO EMOJIS)
+    private fun buildMahjongView(): View {
+        val col = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(Theme.dp(ctx, 16), Theme.dp(ctx, 4), Theme.dp(ctx, 16), Theme.dp(ctx, 24))
+        }
+
+        val bar = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = Theme.roundedBg(Theme.card, Theme.dp(ctx, 14).toFloat(), Theme.border, Theme.dp(ctx, 1))
+            val p = Theme.dp(ctx, 12)
+            setPadding(p, p, p, p)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = Theme.dp(ctx, 14)
+            }
+        }
+        bar.addView(TextView(ctx).apply {
+            text = "Пар открыто: $mahjongMatches / 12   •   Ходов: $mahjongMoves"
+            setTextColor(Theme.textPrimary)
+            textSize = 13.5f
+            fontFeatureSettings = "tnum"
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        bar.addView(Components.solidIconButton(ctx, R.drawable.ic_refresh, Theme.cardAlt, Theme.textPrimary, 34, 16, 8f) {
+            resetMahjongBoard()
+            render()
+        })
+        col.addView(bar)
+
+        val grid = GridLayout(ctx).apply { columnCount = 4 }
+        mahjongBoard.forEachIndexed { idx, tile ->
+            val selected = selectedTileId == tile.id
+            val cell = FrameLayout(ctx).apply {
+                val bg = when {
+                    tile.matched -> Theme.withAlpha(Theme.card, 70)
+                    selected -> Theme.withAlpha(Theme.brand, 42)
+                    else -> Theme.card
+                }
+                val stroke = when {
+                    tile.matched -> Color.TRANSPARENT
+                    selected -> Theme.brand
+                    else -> Theme.border
+                }
+                background = Theme.roundedBg(bg, Theme.dp(ctx, 12).toFloat(), stroke, Theme.dp(ctx, if (selected) 2 else 1))
                 layoutParams = GridLayout.LayoutParams().apply {
-                    width = tileW
-                    height = tileH
-                    val m = Theme.dp(ctx, 2.5f)
-                    setMargins(m, m, m, m)
+                    width = 0
+                    height = Theme.dp(ctx, 74)
+                    columnSpec = GridLayout.spec(idx % 4, 1f)
+                    setMargins(Theme.dp(ctx, 4), Theme.dp(ctx, 4), Theme.dp(ctx, 4), Theme.dp(ctx, 4))
                 }
+                if (!tile.matched) {
+                    setOnClickListener { onTileTapped(tile) }
+                }
+            }
+            if (!tile.matched) {
+                cell.addView(TextView(ctx).apply {
+                    text = tile.glyph
+                    setTextColor(tile.suitColor)
+                    textSize = 26f
+                    typeface = Typeface.SERIF
+                    gravity = Gravity.CENTER
+                    layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                })
             }
             grid.addView(cell)
         }
-        gridCard.addView(grid)
-        col.addView(gridCard)
-
-        // Controls: Hint, Shuffle, New Game
-        val ctrlRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = Theme.dp(ctx, 12)
-            }
-        }
-        ctrlRow.addView(TextView(ctx).apply {
-            text = "💡 Подсказка"
-            setTextColor(Theme.textPrimary)
-            textSize = 13f
-            gravity = Gravity.CENTER
-            background = Theme.rippleCard(ctx, Theme.cardAlt, 12f)
-            setPadding(Theme.dp(ctx, 10), Theme.dp(ctx, 11), Theme.dp(ctx, 10), Theme.dp(ctx, 11))
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = Theme.dp(ctx, 6) }
-            setOnClickListener {
-                val freeTiles = mahjongBoard.filter { isTileFreeInRow(it.slotId) }
-                val pair = freeTiles.groupBy { it.code }.values.firstOrNull { it.size >= 2 }
-                if (pair != null) {
-                    selectedTileSlot = pair[0].slotId
-                    Toast.makeText(ctx, "Найдена пара: ${pair[0].nameRu}!", Toast.LENGTH_SHORT).show()
-                    render()
-                } else {
-                    Toast.makeText(ctx, "Свободных пар нет — нажмите «Перемешать»!", Toast.LENGTH_SHORT).show()
-                }
-            }
-        })
-        ctrlRow.addView(TextView(ctx).apply {
-            text = "🔀 Перемешать"
-            setTextColor(Theme.textPrimary)
-            textSize = 13f
-            gravity = Gravity.CENTER
-            background = Theme.rippleCard(ctx, Theme.cardAlt, 12f)
-            setPadding(Theme.dp(ctx, 10), Theme.dp(ctx, 11), Theme.dp(ctx, 10), Theme.dp(ctx, 11))
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = Theme.dp(ctx, 6) }
-            setOnClickListener {
-                val activeSpecs = mahjongBoard.filter { !it.matched }.shuffled()
-                var k = 0
-                for (i in mahjongBoard.indices) {
-                    if (!mahjongBoard[i].matched) {
-                        val s = activeSpecs[k++]
-                        mahjongBoard[i] = MahjongTile(i, s.code, s.symbol, s.nameRu, s.loreRu, s.color, false)
-                    }
-                }
-                selectedTileSlot = null
-                render()
-            }
-        })
-        ctrlRow.addView(TextView(ctx).apply {
-            text = "🔄 Заново"
-            setTextColor(Color.WHITE)
-            textSize = 13f
-            paint.isFakeBoldText = true
-            gravity = Gravity.CENTER
-            background = Theme.rippleButton(ctx, Theme.accentEmerald, 12f)
-            setPadding(Theme.dp(ctx, 10), Theme.dp(ctx, 11), Theme.dp(ctx, 10), Theme.dp(ctx, 11))
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            setOnClickListener {
-                resetMahjongBoard()
-                render()
-            }
-        })
-        col.addView(ctrlRow)
-
-        // Cultural Encyclopedia Card
-        val loreCard = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            background = Theme.roundedBg(Theme.card, Theme.dp(ctx, 16).toFloat(), Theme.accentAmber, Theme.dp(ctx, 1))
-            val p = Theme.dp(ctx, 14)
-            setPadding(p, p, p, p)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = Theme.dp(ctx, 12)
-            }
-        }
-        loreCard.addView(TextView(ctx).apply {
-            text = "🏮 Культурная энциклопедия Востока"
-            setTextColor(Theme.accentAmber)
-            textSize = 12.5f
-            paint.isFakeBoldText = true
-        })
-        loreCard.addView(TextView(ctx).apply {
-            text = lastCulturalNote
-            setTextColor(Theme.textPrimary)
-            textSize = 13.5f
-            setPadding(0, Theme.dp(ctx, 4), 0, 0)
-        })
-        col.addView(loreCard)
-
-        scroll.addView(col)
-        return scroll
+        col.addView(grid)
+        return col
     }
 
-    // =========================================================================
-    // MODULE 3: TERONPAY CRYPTO WALLET (ECDSA OFFLINE AIRMESH P2P VOUCHERS)
-    // =========================================================================
-    private fun buildWalletView(): View {
-        val me = app.db.getProfile()
-        val balances = app.db.getWalletBalances()
-        val txs = app.db.getWalletTransactions()
-        val totalRub = balances.sumOf { it.balance * it.rateRub }
-
-        val scroll = ScrollView(ctx)
-        val col = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(Theme.dp(ctx, 16), Theme.dp(ctx, 12), Theme.dp(ctx, 16), Theme.dp(ctx, 24))
+    private fun onTileTapped(tile: Tile) {
+        val prevId = selectedTileId
+        if (prevId == null) {
+            selectedTileId = tile.id
+            render()
+            return
         }
-
-        col.addView(TextView(ctx).apply {
-            text = "← Экосистема"
-            setTextColor(Theme.accentCyan)
-            textSize = 14.5f
-            paint.isFakeBoldText = true
-            setPadding(0, 0, 0, Theme.dp(ctx, 10))
-            setOnClickListener { activeModule = null; render() }
-        })
-
-        // Portfolio Hero Card
-        val hero = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            background = Theme.gradientBg(
-                intArrayOf(0xFF0E293C.toInt(), 0xFF1D174A.toInt(), 0xFF0F172A.toInt()),
-                Theme.dp(ctx, 24).toFloat(),
-                android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
-                Theme.accentCyan,
-                Theme.dp(ctx, 1)
-            )
-            val p = Theme.dp(ctx, 20)
-            setPadding(p, p, p, p)
+        if (prevId == tile.id) {
+            selectedTileId = null
+            render()
+            return
         }
-        hero.addView(TextView(ctx).apply {
-            text = "TeronPay • Децентрализованный сейф"
-            setTextColor(0xFF94A3B8.toInt())
-            textSize = 12.5f
-        })
-        hero.addView(TextView(ctx).apply {
-            text = "≈ ${"%,.0f".format(Locale("ru"), totalRub)} ₽"
-            setTextColor(Color.WHITE)
-            textSize = 30f
-            paint.isFakeBoldText = true
-            setPadding(0, Theme.dp(ctx, 4), 0, Theme.dp(ctx, 4))
-        })
-        hero.addView(TextView(ctx).apply {
-            text = "Адрес: ${me.walletAddress.take(18)}…${me.walletAddress.takeLast(6)} (нажмите, чтобы скопировать)"
-            setTextColor(Theme.accentCyan)
-            textSize = 11.5f
-            setOnClickListener {
-                val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                cm.setPrimaryClip(ClipData.newPlainText("TeronPay Address", me.walletAddress))
-                Toast.makeText(ctx, "Адрес кошелька скопирован!", Toast.LENGTH_SHORT).show()
+        val prevTile = mahjongBoard.find { it.id == prevId }
+        mahjongMoves++
+        if (prevTile != null && prevTile.glyph == tile.glyph) {
+            prevTile.matched = true
+            tile.matched = true
+            mahjongMatches++
+            selectedTileId = null
+            if (mahjongMatches >= 12) {
+                Toast.makeText(ctx, "Партия завершена за $mahjongMoves ходов", Toast.LENGTH_LONG).show()
             }
-        })
-
-        val actRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = Theme.dp(ctx, 16)
-            }
+        } else {
+            selectedTileId = tile.id
         }
-        actRow.addView(TextView(ctx).apply {
-            text = "💸 Перевести по AirMesh"
-            setTextColor(Color.WHITE)
-            textSize = 13.5f
-            paint.isFakeBoldText = true
-            gravity = Gravity.CENTER
-            background = Theme.rippleButton(ctx, Theme.accentIndigo, 13f)
-            setPadding(Theme.dp(ctx, 12), Theme.dp(ctx, 11), Theme.dp(ctx, 12), Theme.dp(ctx, 11))
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.3f).apply { rightMargin = Theme.dp(ctx, 8) }
-            setOnClickListener { showSendCryptoDialog() }
-        })
-        actRow.addView(TextView(ctx).apply {
-            text = "🔑 Seed-фраза"
-            setTextColor(Color.WHITE)
-            textSize = 13.5f
-            gravity = Gravity.CENTER
-            background = Theme.rippleCard(ctx, 0x33FFFFFF, 13f, Color.TRANSPARENT, 0f)
-            setPadding(Theme.dp(ctx, 12), Theme.dp(ctx, 11), Theme.dp(ctx, 12), Theme.dp(ctx, 11))
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 0.9f)
-            setOnClickListener {
-                AlertDialog.Builder(ctx)
-                    .setTitle("🔑 Мнемоническая фраза (12 слов)")
-                    .setMessage("${me.seedPhrase}\n\nХраните фразу в тайне: она даёт полный доступ к вашим криптоключам ECDSA.")
-                    .setPositiveButton("Понятно", null)
-                    .show()
-            }
-        })
-        hero.addView(actRow)
-        col.addView(hero)
-
-        // Assets List
-        col.addView(Components.sectionHeader(ctx, "АКТИВЫ КОШЕЛЬКА"))
-        for (b in balances) {
-            val row = LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                background = Theme.roundedBg(Theme.card, Theme.dp(ctx, 16).toFloat(), Theme.border, Theme.dp(ctx, 1))
-                val p = Theme.dp(ctx, 13)
-                setPadding(p, p, p, p)
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    bottomMargin = Theme.dp(ctx, 8)
-                }
-            }
-            row.addView(Components.squircleIcon(ctx, b.glyph, b.accentColor, 42, 18f))
-            val info = LinearLayout(ctx).apply {
-                orientation = LinearLayout.VERTICAL
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { leftMargin = Theme.dp(ctx, 12) }
-            }
-            info.addView(TextView(ctx).apply {
-                text = b.name
-                setTextColor(Theme.textPrimary)
-                textSize = 15f
-                paint.isFakeBoldText = true
-            })
-            info.addView(TextView(ctx).apply {
-                text = b.symbol
-                setTextColor(Theme.textSecondary)
-                textSize = 12f
-            })
-            row.addView(info)
-
-            val valCol = LinearLayout(ctx).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = Gravity.END
-            }
-            val fmtBal = if (b.symbol == "BTC") "%.4f".format(b.balance) else "%.2f".format(b.balance)
-            valCol.addView(TextView(ctx).apply {
-                text = "$fmtBal ${b.symbol}"
-                setTextColor(Theme.textPrimary)
-                textSize = 15f
-                paint.isFakeBoldText = true
-            })
-            valCol.addView(TextView(ctx).apply {
-                text = "≈ ${"%,.0f".format(Locale("ru"), b.balance * b.rateRub)} ₽"
-                setTextColor(Theme.textSecondary)
-                textSize = 12f
-            })
-            row.addView(valCol)
-            col.addView(row)
-        }
-
-        // Transactions History
-        col.addView(Components.sectionHeader(ctx, "ИСТОРИЯ ПОДПИСАННЫХ ОПЕРАЦИЙ"))
-        for (tx in txs) {
-            val card = LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                background = Theme.roundedBg(Theme.card, Theme.dp(ctx, 14).toFloat(), Theme.border, Theme.dp(ctx, 1))
-                val p = Theme.dp(ctx, 12)
-                setPadding(p, p, p, p)
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    bottomMargin = Theme.dp(ctx, 7)
-                }
-            }
-            val signStr = if (tx.isIncoming) "+" else "−"
-            val colSign = if (tx.isIncoming) Theme.accentEmerald else Theme.accentAmber
-            card.addView(Components.squircleIcon(ctx, if (tx.isIncoming) "↓" else "↑", colSign, 38, 17f))
-            val mid = LinearLayout(ctx).apply {
-                orientation = LinearLayout.VERTICAL
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { leftMargin = Theme.dp(ctx, 10) }
-            }
-            mid.addView(TextView(ctx).apply {
-                text = "${tx.counterpartyName} • ${tx.memo}"
-                setTextColor(Theme.textPrimary)
-                textSize = 13.5f
-                paint.isFakeBoldText = true
-                maxLines = 1
-            })
-            mid.addView(TextView(ctx).apply {
-                text = "${tx.txHash} • ECDSA ✓ • ${Theme.formatTime(tx.timestampMs)}"
-                setTextColor(Theme.textMuted)
-                textSize = 11f
-            })
-            card.addView(mid)
-            card.addView(TextView(ctx).apply {
-                text = "$signStr${tx.amount} ${tx.symbol}"
-                setTextColor(colSign)
-                textSize = 14f
-                paint.isFakeBoldText = true
-            })
-            col.addView(card)
-        }
-
-        scroll.addView(col)
-        return scroll
-    }
-
-    private fun showSendCryptoDialog() {
-        val me = app.db.getProfile()
-        val peerDefault = app.meshEngine.livePeers.values.firstOrNull()?.nodeId
-            ?: app.db.getContacts().firstOrNull()?.nodeId
-            ?: "TRN-FRIEND01"
-
-        val layout = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            val p = Theme.dp(ctx, 16)
-            setPadding(p, p, p, p)
-        }
-        val toEdit = EditText(ctx).apply {
-            setText(peerDefault)
-            hint = "ID узла (TRN-...) или trn1-адрес"
-            setSingleLine(true)
-        }
-        val symEdit = EditText(ctx).apply {
-            setText("TRN")
-            hint = "Валюта (TRN, TON, USDT)"
-            setSingleLine(true)
-        }
-        val amtEdit = EditText(ctx).apply {
-            setText("15.0")
-            hint = "Сумма"
-            setSingleLine(true)
-        }
-        val memoEdit = EditText(ctx).apply {
-            setText("Офлайн P2P расчёт AirMesh")
-            hint = "Комментарий к чеку"
-            setSingleLine(true)
-        }
-        layout.addView(toEdit)
-        layout.addView(symEdit)
-        layout.addView(amtEdit)
-        layout.addView(memoEdit)
-
-        AlertDialog.Builder(ctx)
-            .setTitle("💸 P2P крипто-перевод через AirMesh")
-            .setView(layout)
-            .setPositiveButton("Подписать ECDSA и отправить") { _, _ ->
-                val to = toEdit.text.toString().trim()
-                val sym = symEdit.text.toString().trim().uppercase()
-                val amt = amtEdit.text.toString().replace(',', '.').toDoubleOrNull() ?: 0.0
-                val memo = memoEdit.text.toString().trim()
-                val txHash = "0x" + TeronCrypto.shortSha256Hex("${me.nodeId}:$to:$sym:$amt:${System.currentTimeMillis()}", 10)
-                val sig = TeronCrypto.signData(me.privateKeyB64, "$txHash:$sym:$amt:$to")
-
-                val ok = app.db.recordWalletTransfer(
-                    txHash = txHash,
-                    symbol = sym,
-                    amount = amt,
-                    counterpartyName = to,
-                    counterpartyAddress = to,
-                    isIncoming = false,
-                    memo = memo,
-                    signatureHex = sig.take(28),
-                    viaAirMesh = true
-                )
-                if (ok) {
-                    app.meshEngine.broadcastSignedCryptoTransfer(txHash, sym, amt, to, memo, sig.take(28))
-                    Toast.makeText(ctx, "Чек $txHash подписан ECDSA и отправлен в AirMesh!", Toast.LENGTH_LONG).show()
-                    render()
-                } else {
-                    Toast.makeText(ctx, "Недостаточно средств на балансе $sym или неверная сумма", Toast.LENGTH_SHORT).show()
-                }
-            }
-            .setNegativeButton("Отмена", null)
-            .show()
+        render()
     }
 }

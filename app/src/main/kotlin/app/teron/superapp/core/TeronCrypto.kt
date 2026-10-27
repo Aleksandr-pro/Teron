@@ -1,6 +1,7 @@
 package app.teron.superapp.core
 
 import android.util.Base64
+import app.teron.superapp.crypto.Secp256k1Wallet
 import java.security.KeyFactory
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
@@ -20,16 +21,11 @@ import javax.crypto.spec.SecretKeySpec
 object TeronCrypto {
     private val rng = SecureRandom()
 
-    private val seedWords = arrayOf(
-        "океан", "маяк", "тайга", "кедр", "волна", "зенит", "пульс", "кварц",
-        "север", "берег", "ветер", "пламя", "орбита", "сокол", "гранит", "иней",
-        "луч", "шторм", "парус", "кристалл", "азимут", "комета", "рассвет", "скала",
-        "титан", "сфера", "молния", "прибой", "звезда", "туман", "компас", "рубин"
-    )
-
     data class GeneratedIdentity(
         val nodeId: String,
-        val walletAddress: String,
+        val walletAddress: String, // ETH 0x...
+        val btcAddress: String,    // BTC bc1q...
+        val trxAddress: String,    // TRX T...
         val publicKeyB64: String,
         val privateKeyB64: String,
         val seedPhrase: String
@@ -40,7 +36,17 @@ object TeronCrypto {
         val ivB64: String
     )
 
-    fun generateIdentity(): GeneratedIdentity {
+    fun generateIdentity(existingMnemonic: String? = null): GeneratedIdentity {
+        val mnemonic = if (existingMnemonic != null && Secp256k1Wallet.validateMnemonic(existingMnemonic)) {
+            Secp256k1Wallet.normalizeMnemonic(existingMnemonic)
+        } else {
+            Secp256k1Wallet.generateMnemonic12()
+        }
+        val chains = Secp256k1Wallet.deriveMultiChain(mnemonic)
+        val idHash = MessageDigest.getInstance("SHA-256")
+            .digest("TERON-NODE-V2::${chains.ethAddress.lowercase()}".toByteArray(Charsets.UTF_8))
+        val nodeHex = idHash.take(4).joinToString("") { "%02X".format(it) }
+
         return try {
             val kpg = KeyPairGenerator.getInstance("EC")
             try {
@@ -49,32 +55,25 @@ object TeronCrypto {
                 kpg.initialize(256, rng)
             }
             val kp = kpg.generateKeyPair()
-            val pubBytes = kp.public.encoded
-            val privBytes = kp.private.encoded
-
-            val digest = MessageDigest.getInstance("SHA-256").digest(pubBytes)
-            val nodeHex = digest.take(4).joinToString("") { "%02X".format(it) }
-            val walletHex = digest.take(16).joinToString("") { "%02x".format(it) }
-
-            val words = (1..12).map { seedWords[rng.nextInt(seedWords.size)] }.joinToString(" ")
             GeneratedIdentity(
                 nodeId = "TRN-$nodeHex",
-                walletAddress = "trn1$walletHex",
-                publicKeyB64 = Base64.encodeToString(pubBytes, Base64.NO_WRAP),
-                privateKeyB64 = Base64.encodeToString(privBytes, Base64.NO_WRAP),
-                seedPhrase = words
+                walletAddress = chains.ethAddress,
+                btcAddress = chains.btcAddress,
+                trxAddress = chains.trxAddress,
+                publicKeyB64 = Base64.encodeToString(kp.public.encoded, Base64.NO_WRAP),
+                privateKeyB64 = Base64.encodeToString(kp.private.encoded, Base64.NO_WRAP),
+                seedPhrase = mnemonic
             )
         } catch (_: Throwable) {
             val rndBytes = ByteArray(32).also { rng.nextBytes(it) }
-            val nodeHex = rndBytes.take(4).joinToString("") { "%02X".format(it) }
-            val walletHex = rndBytes.take(16).joinToString("") { "%02x".format(it) }
-            val words = (1..12).map { seedWords[rng.nextInt(seedWords.size)] }.joinToString(" ")
             GeneratedIdentity(
                 nodeId = "TRN-$nodeHex",
-                walletAddress = "trn1$walletHex",
+                walletAddress = chains.ethAddress,
+                btcAddress = chains.btcAddress,
+                trxAddress = chains.trxAddress,
                 publicKeyB64 = Base64.encodeToString(rndBytes, Base64.NO_WRAP),
                 privateKeyB64 = Base64.encodeToString(rndBytes, Base64.NO_WRAP),
-                seedPhrase = words
+                seedPhrase = mnemonic
             )
         }
     }
@@ -86,7 +85,7 @@ object TeronCrypto {
             hash.take(12).chunked(2).joinToString(":") { pair ->
                 pair.joinToString("") { "%02X".format(it) }
             }
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             "00:00:00:00:00:00"
         }
     }
@@ -110,7 +109,7 @@ object TeronCrypto {
             ka.doPhase(pub, true)
             val shared = ka.generateSecret()
             hkdfSha256(shared, "TERON-AIRMESH-E2EE-V1".toByteArray())
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             deriveChannelKey("fallback")
         }
     }
@@ -149,7 +148,7 @@ object TeronCrypto {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key32.copyOf(32), "AES"), GCMParameterSpec(128, iv))
             String(cipher.doFinal(enc), Charsets.UTF_8)
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             null
         }
     }
@@ -160,7 +159,7 @@ object TeronCrypto {
             sig.initSign(decodePrivateKey(privateKeyB64))
             sig.update(payload.toByteArray(Charsets.UTF_8))
             Base64.encodeToString(sig.sign(), Base64.NO_WRAP)
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             ""
         }
     }
@@ -172,7 +171,7 @@ object TeronCrypto {
             sig.initVerify(decodePublicKey(publicKeyB64))
             sig.update(payload.toByteArray(Charsets.UTF_8))
             sig.verify(Base64.decode(signatureB64, Base64.NO_WRAP))
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             false
         }
     }

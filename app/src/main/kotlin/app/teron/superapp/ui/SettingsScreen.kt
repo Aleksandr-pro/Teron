@@ -1,318 +1,401 @@
 package app.teron.superapp.ui
 
-import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
+import android.graphics.Typeface
 import android.os.Build
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
+import app.teron.superapp.R
 import app.teron.superapp.TeronApp
 import app.teron.superapp.core.TeronCrypto
 import app.teron.superapp.core.Theme
 import app.teron.superapp.mesh.MeshForegroundService
+import java.io.File
+import java.util.Locale
 
-object SettingsScreen {
+class SettingsScreen(
+    private val ctx: Context,
+    private val app: TeronApp,
+    private val onThemeChanged: () -> Unit,
+    private val onOpenSunCode: () -> Unit,
+    private val onOpenWalletBackup: () -> Unit,
+    private val onResetToOnboarding: () -> Unit
+) {
+    private var rootContainer: LinearLayout? = null
 
-    fun build(
-        ctx: Context,
-        app: TeronApp,
-        onBack: (() -> Unit)?,
-        onThemeChanged: () -> Unit,
-        onOpenSunCode: (scanTab: Boolean) -> Unit,
-        onRequestAllPermissions: () -> Unit
-    ): View {
-        val profile = app.db.getProfile()
-        val scroll = ScrollView(ctx)
-        val col = LinearLayout(ctx).apply {
+    fun build(): View {
+        val root = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            val p = Theme.dp(ctx, 16)
-            setPadding(p, Theme.dp(ctx, 12), p, Theme.dp(ctx, 28))
+            layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         }
-
-        if (onBack != null) {
-            col.addView(TextView(ctx).apply {
-                text = "← Назад в Экосистему"
-                setTextColor(Theme.accentCyan)
-                textSize = 14.5f
-                paint.isFakeBoldText = true
-                setPadding(0, 0, 0, Theme.dp(ctx, 10))
-                setOnClickListener { onBack() }
-            })
-        }
-
-        // Profile Center Card (inspired by the article's Settings screenshot)
-        val centerCard = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            background = Theme.roundedBg(Theme.card, Theme.dp(ctx, 22).toFloat(), Theme.border, Theme.dp(ctx, 1))
-            val p = Theme.dp(ctx, 20)
-            setPadding(p, p, p, p)
-        }
-        centerCard.addView(Components.squircleIcon(ctx, profile.avatarGlyph, profile.avatarColor, 72, 32f))
-        centerCard.addView(TextView(ctx).apply {
-            text = profile.displayName
-            setTextColor(Theme.textPrimary)
-            textSize = 22f
-            paint.isFakeBoldText = true
-            setPadding(0, Theme.dp(ctx, 10), 0, Theme.dp(ctx, 2))
-        })
-        centerCard.addView(TextView(ctx).apply {
-            text = "${profile.handle}  •  ${profile.nodeId}"
-            setTextColor(Theme.accentCyan)
-            textSize = 12.8f
-        })
-        if (profile.bio.isNotBlank()) {
-            centerCard.addView(TextView(ctx).apply {
-                text = profile.bio
-                setTextColor(Theme.textSecondary)
-                textSize = 12.5f
-                gravity = Gravity.CENTER
-                setPadding(Theme.dp(ctx, 8), Theme.dp(ctx, 6), Theme.dp(ctx, 8), 0)
-            })
-        }
-
-        val btnRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = Theme.dp(ctx, 14)
-            }
-        }
-        btnRow.addView(TextView(ctx).apply {
-            text = "👤 Профиль"
-            setTextColor(Theme.textPrimary)
-            textSize = 13.5f
-            paint.isFakeBoldText = true
-            background = Theme.rippleCard(ctx, Theme.cardAlt, 14f)
-            setPadding(Theme.dp(ctx, 16), Theme.dp(ctx, 9), Theme.dp(ctx, 16), Theme.dp(ctx, 9))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                rightMargin = Theme.dp(ctx, 8)
-            }
-            setOnClickListener {
-                showEditProfileDialog(ctx, app, onThemeChanged)
-            }
-        })
-        btnRow.addView(TextView(ctx).apply {
-            text = "☀ Мой SunCode"
-            setTextColor(Color.WHITE)
-            textSize = 13.5f
-            paint.isFakeBoldText = true
-            background = Theme.rippleButton(ctx, Theme.accentIndigo, 14f)
-            setPadding(Theme.dp(ctx, 16), Theme.dp(ctx, 9), Theme.dp(ctx, 16), Theme.dp(ctx, 9))
-            setOnClickListener { onOpenSunCode(false) }
-        })
-        centerCard.addView(btnRow)
-        col.addView(centerCard)
-
-        // Settings Group Card
-        val group = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            background = Theme.roundedBg(Theme.card, Theme.dp(ctx, 20).toFloat(), Theme.border, Theme.dp(ctx, 1))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = Theme.dp(ctx, 16)
-            }
-        }
-
-        fun settingRow(glyph: String, iconBg: Int, title: String, subtitle: String, onClick: () -> Unit): View {
-            return LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                background = Theme.rippleCard(ctx, Color.TRANSPARENT, 0f, Color.TRANSPARENT, 0f)
-                val px = Theme.dp(ctx, 14)
-                val py = Theme.dp(ctx, 13)
-                setPadding(px, py, px, py)
-                addView(Components.squircleIcon(ctx, glyph, iconBg, 38, 17f))
-                val mid = LinearLayout(ctx).apply {
-                    orientation = LinearLayout.VERTICAL
-                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                        leftMargin = Theme.dp(ctx, 12)
-                    }
-                }
-                mid.addView(TextView(ctx).apply {
-                    text = title
-                    setTextColor(Theme.textPrimary)
-                    textSize = 15f
-                    paint.isFakeBoldText = true
-                })
-                mid.addView(TextView(ctx).apply {
-                    text = subtitle
-                    setTextColor(Theme.textSecondary)
-                    textSize = 12f
-                })
-                addView(mid)
-                addView(TextView(ctx).apply {
-                    text = "›"
-                    setTextColor(Theme.textMuted)
-                    textSize = 22f
-                })
-                setOnClickListener { onClick() }
-            }
-        }
-
-        group.addView(settingRow(
-            "🎨", Theme.accentPurple,
-            "Внешний вид",
-            if (Theme.isDark) "Тёмная тема Teron Obsidian (нажмите для смены)" else "Светлая тема Teron Pearl (нажмите для смены)"
-        ) {
-            val nextDark = !profile.darkTheme
-            Theme.isDark = nextDark
-            app.db.updateProfile(
-                profile.displayName, profile.handle, profile.bio,
-                profile.avatarColor, profile.avatarGlyph, profile.maxRelayHops,
-                nextDark, profile.backgroundDaemon
-            )
-            onThemeChanged()
-        })
-
-        group.addView(settingRow(
-            "📡", Theme.accentEmerald,
-            "Дальность эстафеты AirMesh",
-            "До ${profile.maxRelayHops} переходов (~${profile.maxRelayHops * 200} м) • Фоновый узел: ${if (profile.backgroundDaemon) "Вкл" else "Выкл"}"
-        ) {
-            val nextHops = if (profile.maxRelayHops >= 6) 2 else profile.maxRelayHops + 1
-            val nextDaemon = !profile.backgroundDaemon
-            app.db.updateProfile(
-                profile.displayName, profile.handle, profile.bio,
-                profile.avatarColor, profile.avatarGlyph, nextHops,
-                profile.darkTheme, nextDaemon
-            )
-            try {
-                val svcIntent = Intent(ctx, MeshForegroundService::class.java)
-                if (nextDaemon) {
-                    if (Build.VERSION.SDK_INT >= 26) ctx.startForegroundService(svcIntent) else ctx.startService(svcIntent)
-                } else {
-                    ctx.stopService(svcIntent)
-                }
-            } catch (_: Exception) {}
-            Toast.makeText(ctx, "Эстафета: до $nextHops переходов • Фоновый режим: ${if (nextDaemon) "Вкл" else "Выкл"}", Toast.LENGTH_SHORT).show()
-            onThemeChanged()
-        })
-
-        group.addView(settingRow(
-            "🔐", Theme.accentBlue,
-            "Конфиденциальность и Ключи",
-            "Отпечаток ECDH: ${TeronCrypto.fingerprintHex(profile.publicKeyB64).take(23)}…"
-        ) {
-            val info = buildString {
-                appendLine("Узел AirMesh: ${profile.nodeId}")
-                appendLine("Кошелёк TeronPay: ${profile.walletAddress}")
-                appendLine("Отпечаток ключа ECDH P-256:")
-                appendLine(TeronCrypto.fingerprintHex(profile.publicKeyB64))
-                appendLine()
-                appendLine("Секретная фраза восстановления (12 слов):")
-                appendLine(profile.seedPhrase)
-                appendLine()
-                appendLine("Все данные хранятся исключительно на устройстве без передачи на сторонние серверы.")
-            }
-            AlertDialog.Builder(ctx)
-                .setTitle("🔐 Ключи шифрования устройства")
-                .setMessage(info)
-                .setPositiveButton("Скопировать ID") { _, _ ->
-                    val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                    cm.setPrimaryClip(ClipData.newPlainText("Teron ID", profile.nodeId))
-                    Toast.makeText(ctx, "ID узла скопирован", Toast.LENGTH_SHORT).show()
-                }
-                .setNegativeButton("Закрыть", null)
-                .show()
-        })
-
-        group.addView(settingRow(
-            "🛡", Theme.accentAmber,
-            "Системные разрешения Android",
-            "Bluetooth LE рядом, Камера SunCode, Локальная музыка"
-        ) {
-            onRequestAllPermissions()
-        })
-
-        group.addView(settingRow(
-            "ℹ️", Theme.accentCyan,
-            "О суперприложении Teron",
-            "Версия 1.0.1 (Build 2) • 100% Native Kotlin APK"
-        ) {
-            AlertDialog.Builder(ctx)
-                .setTitle("Teron SuperApp v1.0.1")
-                .setMessage(
-                    "Нативное Android-приложение (Kotlin + Android SDK, без WebView).\n\n" +
-                        "Включает:\n" +
-                        "• AirMesh — автономный мессенджер по Bluetooth LE и Wi-Fi P2P с эстафетной передачей Store & Forward и сквозным шифрованием ECDH + AES-256-GCM\n" +
-                        "• SunCode — лучевые контактные коды с живым оптическим сканером Camera2\n" +
-                        "• Teron Mail — автономная P2P-почта и SSL IMAP мост\n" +
-                        "• Teron Sound — офлайн-плеер и полифонический синтезатор\n" +
-                        "• Ханьцзы Додзё — изучение китайского по ассоциациям и каллиграфии\n" +
-                        "• Маджонг Культура — пасьянс с энциклопедией символов\n" +
-                        "• TeronPay — криптокошелёк с офлайн-чеками ECDSA"
-                )
-                .setPositiveButton("Отлично", null)
-                .show()
-        })
-
-        col.addView(group)
-        scroll.addView(col)
-        return scroll
+        rootContainer = root
+        render()
+        return root
     }
 
-    fun showEditProfileDialog(ctx: Context, app: TeronApp, onSaved: () -> Unit) {
-        val cur = app.db.getProfile()
-        val layout = LinearLayout(ctx).apply {
+    fun render() {
+        val root = rootContainer ?: return
+        root.removeAllViews()
+        val me = app.db.getProfile()
+        val mailCfg = app.db.getMailAccountConfig()
+
+        val scroll = ScrollView(ctx).apply {
+            isVerticalScrollBarEnabled = false
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        }
+        val col = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
+            setPadding(Theme.dp(ctx, 16), Theme.dp(ctx, 6), Theme.dp(ctx, 16), Theme.dp(ctx, 28))
+        }
+
+        // Profile Summary Card
+        val profileCard = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = Theme.rippleCard(ctx, Theme.card, 16f, Theme.border, 1f)
             val p = Theme.dp(ctx, 16)
             setPadding(p, p, p, p)
+            setOnClickListener { showEditProfileSheet() }
         }
-        val nameEdit = EditText(ctx).apply {
-            setText(cur.displayName)
-            hint = "Ваше имя или позывной"
-            setSingleLine(true)
-        }
-        val handleEdit = EditText(ctx).apply {
-            setText(cur.handle)
-            hint = "Почтовый адрес (напр. alex@teron.mesh)"
-            setSingleLine(true)
-        }
-        val bioEdit = EditText(ctx).apply {
-            setText(cur.bio)
-            hint = "О себе / статус узла"
-            setSingleLine(true)
-        }
-        val glyphEdit = EditText(ctx).apply {
-            setText(cur.avatarGlyph)
-            hint = "Символ аватара (напр. ⚡, 🐉, 🌊, 🚀)"
-            setSingleLine(true)
-        }
-        layout.addView(nameEdit)
-        layout.addView(handleEdit)
-        layout.addView(bioEdit)
-        layout.addView(glyphEdit)
+        profileCard.addView(Components.monogramAvatar(ctx, me.displayName, me.avatarColor, 52, 18f))
 
-        AlertDialog.Builder(ctx)
-            .setTitle("👤 Настройка профиля Teron")
-            .setView(layout)
-            .setPositiveButton("Сохранить") { _, _ ->
-                val rawHandle = handleEdit.text.toString().trim().let {
-                    if (it.contains("@")) it else "$it@teron.mesh"
-                }
-                val nextColor = Theme.avatarPalette[(nameEdit.text.toString().hashCode() and 0x7FFFFFFF) % Theme.avatarPalette.size]
-                app.db.updateProfile(
-                    displayName = nameEdit.text.toString(),
-                    handle = rawHandle,
-                    bio = bioEdit.text.toString(),
-                    avatarColor = nextColor,
-                    avatarGlyph = glyphEdit.text.toString().trim().take(2).ifBlank { "⚡" },
-                    maxRelayHops = cur.maxRelayHops,
-                    darkTheme = cur.darkTheme,
-                    backgroundDaemon = cur.backgroundDaemon
-                )
-                onSaved()
+        val pInfo = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                leftMargin = Theme.dp(ctx, 14)
+                rightMargin = Theme.dp(ctx, 8)
             }
-            .setNegativeButton("Отмена", null)
-            .show()
+        }
+        pInfo.addView(TextView(ctx).apply {
+            text = me.displayName
+            setTextColor(Theme.textPrimary)
+            textSize = 16.5f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        })
+        pInfo.addView(TextView(ctx).apply {
+            text = "${me.handle} • ${me.nodeId}"
+            setTextColor(Theme.brandText)
+            textSize = 12f
+            typeface = Typeface.MONOSPACE
+            setPadding(0, Theme.dp(ctx, 2), 0, Theme.dp(ctx, 2))
+        })
+        pInfo.addView(TextView(ctx).apply {
+            text = me.bio.ifBlank { "Нажмите для редактирования профиля" }
+            setTextColor(Theme.textSecondary)
+            textSize = 12f
+            maxLines = 1
+        })
+        profileCard.addView(pInfo)
+        profileCard.addView(Components.solidIconButton(ctx, R.drawable.ic_suncode, Theme.cardAlt, Theme.brandText, 38, 18, 10f) {
+            onOpenSunCode()
+        })
+        col.addView(profileCard)
+
+        // SECTION 1: Identity & Cryptography
+        col.addView(Components.sectionHeader(ctx, "Безопасность и ключи"))
+        val secGroup = groupCard()
+        secGroup.addView(settingRow(
+            iconRes = R.drawable.ic_key,
+            iconColor = Theme.accentAmber,
+            title = "Секретная фраза кошелька (BIP-39)",
+            subtitle = "BTC: ${Theme.shortAddress(me.btcAddress, 6, 4)} • ETH: ${Theme.shortAddress(me.walletAddress, 6, 4)}",
+            onClick = { onOpenWalletBackup() }
+        ))
+        secGroup.addView(Components.divider(ctx, 58))
+        secGroup.addView(settingRow(
+            iconRes = R.drawable.ic_shield,
+            iconColor = Theme.accentEmerald,
+            title = "Ключ шифрования ECDH P-256",
+            subtitle = TeronCrypto.fingerprintHex(me.publicKeyB64),
+            onClick = {
+                val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(ClipData.newPlainText("ECDH Public Key", me.publicKeyB64))
+                Toast.makeText(ctx, "Публичный ключ скопирован", Toast.LENGTH_SHORT).show()
+            }
+        ))
+        secGroup.addView(Components.divider(ctx, 58))
+        secGroup.addView(settingRow(
+            iconRes = R.drawable.ic_suncode,
+            iconColor = Theme.brandText,
+            title = "Карточка контакта SunCode и QR",
+            subtitle = "Поделиться профилем или отсканировать собеседника",
+            onClick = { onOpenSunCode() }
+        ))
+        col.addView(secGroup)
+
+        // SECTION 2: Network & Mail
+        col.addView(Components.sectionHeader(ctx, "Сеть AirMesh и Почта"))
+        val netGroup = groupCard()
+        val localIp = app.meshEngine.getLocalIpv4()
+        netGroup.addView(settingRow(
+            iconRes = R.drawable.ic_mesh,
+            iconColor = Theme.brandText,
+            title = "Ретрансляция пакетов AirMesh",
+            subtitle = "До ${me.maxRelayHops} переходов • Узел: ${localIp.ifBlank { "офлайн" }}",
+            onClick = {
+                val next = if (me.maxRelayHops >= 6) 2 else me.maxRelayHops + 1
+                app.db.updateProfile(
+                    me.displayName, me.handle, me.bio, me.avatarColor, me.avatarGlyph,
+                    next, me.darkTheme, me.backgroundDaemon
+                )
+                render()
+            }
+        ))
+        netGroup.addView(Components.divider(ctx, 58))
+
+        // Background daemon toggle
+        val daemonRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            val p = Theme.dp(ctx, 14)
+            setPadding(p, p, p, p)
+        }
+        daemonRow.addView(Components.tonalIconBadge(ctx, R.drawable.ic_radar, Theme.accentEmerald, 36, 18, 10f))
+        val dCol = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                leftMargin = Theme.dp(ctx, 12)
+            }
+        }
+        dCol.addView(TextView(ctx).apply {
+            text = "Фоновая служба ретрансляции"
+            setTextColor(Theme.textPrimary)
+            textSize = 14.5f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        })
+        dCol.addView(TextView(ctx).apply {
+            text = "Поддерживать приём сообщений при выключенном экране"
+            setTextColor(Theme.textSecondary)
+            textSize = 12f
+        })
+        daemonRow.addView(dCol)
+        daemonRow.addView(Switch(ctx).apply {
+            isChecked = me.backgroundDaemon
+            setOnCheckedChangeListener { _, checked ->
+                app.db.updateProfile(
+                    me.displayName, me.handle, me.bio, me.avatarColor, me.avatarGlyph,
+                    me.maxRelayHops, me.darkTheme, checked
+                )
+                val svc = Intent(ctx, MeshForegroundService::class.java)
+                try {
+                    if (checked) {
+                        if (Build.VERSION.SDK_INT >= 26) ctx.startForegroundService(svc) else ctx.startService(svc)
+                    } else {
+                        ctx.stopService(svc)
+                    }
+                } catch (_: Throwable) {}
+            }
+        })
+        netGroup.addView(daemonRow)
+        netGroup.addView(Components.divider(ctx, 58))
+
+        netGroup.addView(settingRow(
+            iconRes = R.drawable.ic_server,
+            iconColor = if (mailCfg.isConfigured) Theme.accentEmerald else Theme.textSecondary,
+            title = "Внешняя почта IMAP / SMTP",
+            subtitle = if (mailCfg.isConfigured) "${mailCfg.email} (${mailCfg.imapHost})" else "Не подключена (настраивается во вкладке Почта)",
+            onClick = {
+                Toast.makeText(ctx, "Откройте вкладку «Почта» → значок сервера для настройки IMAP/SMTP", Toast.LENGTH_LONG).show()
+            }
+        ))
+        col.addView(netGroup)
+
+        // SECTION 3: Appearance & Storage
+        col.addView(Components.sectionHeader(ctx, "Интерфейс и хранилище"))
+        val sysGroup = groupCard()
+
+        val themeRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            val p = Theme.dp(ctx, 14)
+            setPadding(p, p, p, p)
+        }
+        themeRow.addView(Components.tonalIconBadge(ctx, if (Theme.isDark) R.drawable.ic_moon else R.drawable.ic_sun, Theme.brandText, 36, 18, 10f))
+        val thText = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                leftMargin = Theme.dp(ctx, 12)
+            }
+        }
+        thText.addView(TextView(ctx).apply {
+            text = "Тёмная тема оформления"
+            setTextColor(Theme.textPrimary)
+            textSize = 14.5f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        })
+        thText.addView(TextView(ctx).apply {
+            text = if (Theme.isDark) "Graphite Carbon (#0B0D11)" else "Pure Slate (#F7F8FA)"
+            setTextColor(Theme.textSecondary)
+            textSize = 12f
+        })
+        themeRow.addView(thText)
+        themeRow.addView(Switch(ctx).apply {
+            isChecked = Theme.isDark
+            setOnCheckedChangeListener { _, checked ->
+                Theme.isDark = checked
+                app.db.updateProfile(
+                    me.displayName, me.handle, me.bio, me.avatarColor, me.avatarGlyph,
+                    me.maxRelayHops, checked, me.backgroundDaemon
+                )
+                onThemeChanged()
+            }
+        })
+        sysGroup.addView(themeRow)
+        sysGroup.addView(Components.divider(ctx, 58))
+
+        val dbFile = ctx.getDatabasePath("teron_superapp.db")
+        val dbKb = if (dbFile.exists()) dbFile.length() / 1024.0 else 0.0
+        val convCount = app.db.getConversations(app.meshEngine.livePeers).size
+        sysGroup.addView(settingRow(
+            iconRes = R.drawable.ic_database,
+            iconColor = Theme.textSecondary,
+            title = "Локальная база данных SQLite",
+            subtitle = String.format(Locale.US, "%.1f КБ • Чатов: %d • Контактов: %d", dbKb, convCount, app.db.getContacts().size),
+            onClick = {
+                app.db.writableDatabase.delete("mesh_relay_queue", null, null)
+                Toast.makeText(ctx, "Очередь ретрансляции очищена", Toast.LENGTH_SHORT).show()
+                render()
+            }
+        ))
+        sysGroup.addView(Components.divider(ctx, 58))
+        sysGroup.addView(settingRow(
+            iconRes = R.drawable.ic_trash,
+            iconColor = Theme.accentCoral,
+            title = "Сбросить профиль и данные на устройстве",
+            subtitle = "Удалить локальную базу и перейти к начальной настройке",
+            onClick = { showResetConfirmSheet() }
+        ))
+        col.addView(sysGroup)
+
+        col.addView(TextView(ctx).apply {
+            text = "Teron v2.0.0 • Native Kotlin • Non-Custodial BIP-39 & AirMesh"
+            setTextColor(Theme.textMuted)
+            textSize = 11.5f
+            gravity = Gravity.CENTER
+            setPadding(0, Theme.dp(ctx, 20), 0, Theme.dp(ctx, 6))
+        })
+
+        scroll.addView(col)
+        root.addView(scroll)
+    }
+
+    private fun groupCard(): LinearLayout = LinearLayout(ctx).apply {
+        orientation = LinearLayout.VERTICAL
+        background = Theme.roundedBg(Theme.card, Theme.dp(ctx, 16).toFloat(), Theme.border, Theme.dp(ctx, 1))
+    }
+
+    private fun settingRow(
+        iconRes: Int,
+        iconColor: Int,
+        title: String,
+        subtitle: String,
+        onClick: () -> Unit
+    ): View {
+        val row = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = Theme.rippleSurfaceRow(ctx)
+            val p = Theme.dp(ctx, 14)
+            setPadding(p, p, p, p)
+            setOnClickListener { onClick() }
+        }
+        row.addView(Components.tonalIconBadge(ctx, iconRes, iconColor, 36, 18, 10f))
+        val textCol = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                leftMargin = Theme.dp(ctx, 12)
+                rightMargin = Theme.dp(ctx, 8)
+            }
+        }
+        textCol.addView(TextView(ctx).apply {
+            text = title
+            setTextColor(Theme.textPrimary)
+            textSize = 14.5f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        })
+        textCol.addView(TextView(ctx).apply {
+            text = subtitle
+            setTextColor(Theme.textSecondary)
+            textSize = 12f
+            maxLines = 1
+        })
+        row.addView(textCol)
+        row.addView(Components.icon(ctx, R.drawable.ic_chevron_right, 16, Theme.textMuted))
+        return row
+    }
+
+    private fun showEditProfileSheet() {
+        val me = app.db.getProfile()
+        var chosenColor = me.avatarColor
+        TeronSheets.showBottomSheet(ctx, "Редактирование профиля", "Имя, адрес @teron.mesh и цвет монограммы") { dlg, col ->
+            val nameField = Components.labeledInput(ctx, "Отображаемое имя", "Ваше имя", me.displayName)
+            val handlePrefix = me.handle.substringBefore("@")
+            val handleField = Components.labeledInput(ctx, "Логин в сети Teron", "username", handlePrefix)
+            val bioField = Components.labeledInput(ctx, "О себе / статус", "Краткая подпись", me.bio)
+
+            col.addView(nameField.container)
+            col.addView(handleField.container)
+            col.addView(bioField.container)
+
+            val paletteRow = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    bottomMargin = Theme.dp(ctx, 16)
+                }
+            }
+            for (c in Theme.avatarPalette) {
+                val dot = View(ctx).apply {
+                    val sz = Theme.dp(ctx, 30)
+                    background = Theme.circleBg(c, if (c == chosenColor) Color.WHITE else 0, Theme.dp(ctx, 2))
+                    layoutParams = LinearLayout.LayoutParams(sz, sz).apply { rightMargin = Theme.dp(ctx, 10) }
+                    setOnClickListener { chosenColor = c }
+                }
+                paletteRow.addView(dot)
+            }
+            col.addView(paletteRow)
+
+            col.addView(Components.primaryButton(ctx, "Сохранить изменения", R.drawable.ic_check) {
+                val n = nameField.input.text.toString().trim().ifBlank { me.displayName }
+                val cleanH = handleField.input.text.toString().trim().lowercase(Locale.ROOT)
+                    .replace(Regex("[^a-z0-9._-]"), "").ifBlank { "user" }
+                val b = bioField.input.text.toString().trim()
+                val mono = Theme.initialsFor(n)
+                app.db.updateProfile(
+                    n, "$cleanH@teron.mesh", b, chosenColor, mono,
+                    me.maxRelayHops, me.darkTheme, me.backgroundDaemon
+                )
+                dlg.dismiss()
+                render()
+            })
+        }
+    }
+
+    private fun showResetConfirmSheet() {
+        TeronSheets.showBottomSheet(
+            ctx,
+            "Сбросить локальные данные?",
+            "Убедитесь, что вы сохранили секретную BIP-39 фразу из 12 слов — без неё доступ к кошельку будет утрачен."
+        ) { dlg, col ->
+            col.addView(Components.primaryButton(ctx, "Подтвердить полный сброс", R.drawable.ic_trash, Theme.accentCoral) {
+                val dbPath = File(ctx.getDatabasePath("teron_superapp.db").absolutePath)
+                app.db.close()
+                dbPath.delete()
+                File("${dbPath.absolutePath}-journal").delete()
+                File("${dbPath.absolutePath}-wal").delete()
+                dlg.dismiss()
+                onResetToOnboarding()
+            })
+        }
     }
 }

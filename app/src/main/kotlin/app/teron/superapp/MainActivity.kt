@@ -5,16 +5,19 @@ import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.ContactsContract
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import app.teron.superapp.audio.TeronAudioEngine
@@ -28,18 +31,24 @@ import app.teron.superapp.ui.HomeHubScreen
 import app.teron.superapp.ui.MailScreen
 import app.teron.superapp.ui.MessengerScreen
 import app.teron.superapp.ui.MusicScreen
-import app.teron.superapp.ui.SettingsScreen
+import app.teron.superapp.ui.OnboardingScreen
+import app.teron.superapp.wallet.TeronWalletEngine
+import java.security.MessageDigest
+import java.util.Locale
 
-class MainActivity : Activity(), TeronMeshEngine.Listener, TeronAudioEngine.Listener {
+class MainActivity : Activity(),
+    TeronMeshEngine.Listener,
+    TeronAudioEngine.Listener,
+    TeronWalletEngine.Listener {
 
     companion object {
         private const val REQ_PERMS_BLE = 301
         private const val REQ_PERMS_CAM = 302
         private const val REQ_PERMS_AUDIO = 303
-        private const val REQ_PERMS_ALL = 304
 
         private const val REQ_PICK_SUNCODE_PNG = 401
         private const val REQ_PICK_AUDIO_FILE = 402
+        private const val REQ_PICK_PHONE_CONTACT = 403
     }
 
     private lateinit var app: TeronApp
@@ -58,7 +67,7 @@ class MainActivity : Activity(), TeronMeshEngine.Listener, TeronAudioEngine.List
 
     private val playbackTickRunnable = object : Runnable {
         override fun run() {
-            if (currentTab == 3) {
+            if (currentTab == 3 && ::musicScreen.isInitialized) {
                 musicScreen.updatePlaybackTick()
             }
             uiTickHandler.postDelayed(this, 500L)
@@ -75,51 +84,85 @@ class MainActivity : Activity(), TeronMeshEngine.Listener, TeronAudioEngine.List
                 return
             }
             Theme.isDark = app.db.getProfile().darkTheme
-
-            messengerScreen = MessengerScreen(
-                ctx = this,
-                app = app,
-                onRequestBlePermissions = { requestBlePermissions() },
-                onOpenSunCode = { scan -> openSunCodeModal(scan) }
-            )
-            mailScreen = MailScreen(this, app)
-            musicScreen = MusicScreen(
-                ctx = this,
-                app = app,
-                onRequestAudioPermissionAndScan = { requestAudioPermissionsAndScan() },
-                onOpenAudioFilePicker = { openAudioDocumentPicker() }
-            )
-            ecosystemScreen = EcosystemScreen(
-                ctx = this,
-                app = app,
-                onThemeChanged = { rebuildShell() },
-                onOpenSunCode = { scan -> openSunCodeModal(scan) },
-                onRequestAllPermissions = { requestAllPermissions() }
-            )
-
-            buildShell()
+            initScreens()
+            renderRootState()
             handleIncomingDeepLink(intent)
-
-            // Offer friendly one-time callsign setup on very first launch
-            if (!app.db.isOnboarded()) {
-                app.db.markOnboarded()
-                uiTickHandler.postDelayed({
-                    if (!isFinishing && !isDestroyed) {
-                        try {
-                            SettingsScreen.showEditProfileDialog(this, app) {
-                                rebuildShell()
-                            }
-                        } catch (_: Throwable) {}
-                    }
-                }, 400L)
-            }
         } catch (t: Throwable) {
             showFatalRecoveryView(t.stackTraceToString())
         }
     }
 
+    private fun initScreens() {
+        messengerScreen = MessengerScreen(
+            ctx = this,
+            app = app,
+            onRequestBlePermissions = { requestBlePermissions() },
+            onOpenSunCode = { scan -> openSunCodeModal(scan) }
+        )
+        mailScreen = MailScreen(this, app)
+        musicScreen = MusicScreen(
+            ctx = this,
+            app = app,
+            onRequestAudioPermissionAndScan = { requestAudioPermissionsAndScan() },
+            onOpenAudioFilePicker = { openAudioDocumentPicker() }
+        )
+        ecosystemScreen = EcosystemScreen(
+            ctx = this,
+            app = app,
+            onThemeChanged = { rebuildShell() },
+            onOpenSunCode = { scan -> openSunCodeModal(scan) },
+            onResetToOnboarding = {
+                app.reinitializeAfterReset()
+                initScreens()
+                renderRootState()
+            }
+        )
+    }
+
+    private fun renderRootState() {
+        applySystemBarColors()
+        if (!app.db.isOnboarded()) {
+            val onboarding = OnboardingScreen(this, app) {
+                buildShell()
+            }
+            val wrap = wrapWithInsets(onboarding.build())
+            setContentView(wrap)
+        } else {
+            buildShell()
+        }
+    }
+
+    private fun wrapWithInsets(child: View): View {
+        val frame = FrameLayout(this).apply {
+            setBackgroundColor(Theme.bg)
+            layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            addView(child, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        }
+        attachSystemBarInsets(frame)
+        return frame
+    }
+
+    private fun attachSystemBarInsets(target: View) {
+        if (Build.VERSION.SDK_INT >= 30) {
+            target.setOnApplyWindowInsetsListener { v, insets ->
+                val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.ime())
+                v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+                insets
+            }
+        } else if (Build.VERSION.SDK_INT >= 28) {
+            target.setOnApplyWindowInsetsListener { v, insets ->
+                @Suppress("DEPRECATION")
+                val topInset = insets.systemWindowInsetTop
+                @Suppress("DEPRECATION")
+                val bottomInset = insets.systemWindowInsetBottom
+                v.setPadding(0, topInset, 0, bottomInset)
+                insets
+            }
+        }
+    }
+
     private fun showFatalRecoveryView(trace: String) {
-        val scroll = android.widget.ScrollView(this).apply { setBackgroundColor(0xFF090D16.toInt()) }
+        val scroll = ScrollView(this).apply { setBackgroundColor(0xFF0B0D11.toInt()) }
         val tv = TextView(this).apply {
             text = "Диагностика запуска Teron:\n\n$trace"
             setTextColor(Color.WHITE)
@@ -140,8 +183,10 @@ class MainActivity : Activity(), TeronMeshEngine.Listener, TeronAudioEngine.List
         val data = intent?.data?.toString() ?: return
         val contact = SunCodeCodec.decodeUri(data) ?: return
         app.db.upsertContact(contact.nodeId, contact.displayName, contact.handle, contact.publicKeyB64)
-        Toast.makeText(this, "Контакт SunCode добавлен: ${contact.displayName}", Toast.LENGTH_LONG).show()
-        switchTab(1, contact.nodeId)
+        Toast.makeText(this, "Контакт сохранён: ${contact.displayName}", Toast.LENGTH_LONG).show()
+        if (app.db.isOnboarded()) {
+            switchTab(1, contact.nodeId)
+        }
     }
 
     private fun applySystemBarColors() {
@@ -161,23 +206,7 @@ class MainActivity : Activity(), TeronMeshEngine.Listener, TeronAudioEngine.List
             setBackgroundColor(Theme.bg)
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         }
-
-        if (Build.VERSION.SDK_INT >= 30) {
-            rootFrame.setOnApplyWindowInsetsListener { v, insets ->
-                val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.ime())
-                v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
-                insets
-            }
-        } else if (Build.VERSION.SDK_INT >= 28) {
-            rootFrame.setOnApplyWindowInsetsListener { v, insets ->
-                @Suppress("DEPRECATION")
-                val topInset = insets.systemWindowInsetTop
-                @Suppress("DEPRECATION")
-                val bottomInset = insets.systemWindowInsetBottom
-                v.setPadding(0, topInset, 0, bottomInset)
-                insets
-            }
-        }
+        attachSystemBarInsets(rootFrame)
 
         screenContainer = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
@@ -189,7 +218,7 @@ class MainActivity : Activity(), TeronMeshEngine.Listener, TeronAudioEngine.List
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             background = Theme.roundedBg(Theme.bgElevated, 0f, Theme.border, Theme.dp(this@MainActivity, 1))
-            setPadding(Theme.dp(this@MainActivity, 4), Theme.dp(this@MainActivity, 6), Theme.dp(this@MainActivity, 4), Theme.dp(this@MainActivity, 8))
+            setPadding(Theme.dp(this@MainActivity, 6), Theme.dp(this@MainActivity, 6), Theme.dp(this@MainActivity, 6), Theme.dp(this@MainActivity, 8))
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
 
@@ -207,6 +236,7 @@ class MainActivity : Activity(), TeronMeshEngine.Listener, TeronAudioEngine.List
     }
 
     fun switchTab(tabIndex: Int, subArg: String?) {
+        if (!::screenContainer.isInitialized) return
         currentTab = tabIndex.coerceIn(0, 4)
         screenContainer.removeAllViews()
 
@@ -235,6 +265,7 @@ class MainActivity : Activity(), TeronMeshEngine.Listener, TeronAudioEngine.List
     }
 
     private fun refreshMiniPlayer() {
+        if (!::miniPlayerSlot.isInitialized) return
         miniPlayerSlot.removeAllViews()
         val cur = app.audioEngine.currentTrack
         if (currentTab == 3 || cur == null || (!app.audioEngine.isPlaying && app.audioEngine.currentPositionSec == 0)) {
@@ -244,62 +275,68 @@ class MainActivity : Activity(), TeronMeshEngine.Listener, TeronAudioEngine.List
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = Theme.roundedBg(Theme.cardAlt, Theme.dp(this@MainActivity, 14).toFloat(), cur.accentColor, Theme.dp(this@MainActivity, 1))
+            background = Theme.roundedBg(Theme.card, Theme.dp(this@MainActivity, 14).toFloat(), Theme.border, Theme.dp(this@MainActivity, 1))
             val px = Theme.dp(this@MainActivity, 12)
             val py = Theme.dp(this@MainActivity, 8)
             setPadding(px, py, px, py)
             layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                val m = Theme.dp(this@MainActivity, 8)
+                val m = Theme.dp(this@MainActivity, 10)
                 setMargins(m, 0, m, Theme.dp(this@MainActivity, 6))
             }
             setOnClickListener { switchTab(3, null) }
         }
 
-        bar.addView(Components.squircleIcon(this, "♪", cur.accentColor, 34, 15f))
+        bar.addView(Components.tonalIconBadge(this, R.drawable.ic_music, Theme.brandText, 34, 17, 10f))
         val info = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
                 leftMargin = Theme.dp(this@MainActivity, 10)
+                rightMargin = Theme.dp(this@MainActivity, 8)
             }
         }
         info.addView(TextView(this).apply {
             text = cur.title
             setTextColor(Theme.textPrimary)
             textSize = 13.5f
-            paint.isFakeBoldText = true
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             maxLines = 1
         })
         info.addView(TextView(this).apply {
             text = cur.artist
             setTextColor(Theme.textSecondary)
-            textSize = 11f
+            textSize = 11.5f
             maxLines = 1
         })
         bar.addView(info)
 
-        bar.addView(TextView(this).apply {
-            text = if (app.audioEngine.isPlaying) "⏸" else "▶"
-            setTextColor(Theme.textPrimary)
-            textSize = 18f
-            setPadding(Theme.dp(this@MainActivity, 12), Theme.dp(this@MainActivity, 4), Theme.dp(this@MainActivity, 8), Theme.dp(this@MainActivity, 4))
-            setOnClickListener { app.audioEngine.togglePlayPause() }
+        bar.addView(Components.solidIconButton(
+            this,
+            if (app.audioEngine.isPlaying) R.drawable.ic_pause else R.drawable.ic_play,
+            Theme.brand,
+            Color.WHITE,
+            34,
+            16,
+            17f
+        ) {
+            app.audioEngine.togglePlayPause()
         })
 
         miniPlayerSlot.addView(bar)
     }
 
     private fun refreshBottomNav() {
+        if (!::bottomNavBar.isInitialized) return
         bottomNavBar.removeAllViews()
         val unreadChats = app.db.getTotalUnreadChats()
         val unreadMails = app.db.getUnreadMailCount()
 
-        data class NavSpec(val idx: Int, val icon: String, val title: String, val badge: Int = 0)
+        data class NavSpec(val idx: Int, val iconRes: Int, val title: String, val badge: Int = 0)
         val tabs = listOf(
-            NavSpec(0, "🏠", "Главная"),
-            NavSpec(1, "💬", "Чаты", unreadChats),
-            NavSpec(2, "✉️", "Почта", unreadMails),
-            NavSpec(3, "🎵", "Музыка"),
-            NavSpec(4, "🧩", "Сервисы")
+            NavSpec(0, R.drawable.ic_home, "Главная"),
+            NavSpec(1, R.drawable.ic_chat, "Чаты", unreadChats),
+            NavSpec(2, R.drawable.ic_mail, "Почта", unreadMails),
+            NavSpec(3, R.drawable.ic_music, "Аудио"),
+            NavSpec(4, R.drawable.ic_grid, "Сервисы")
         )
 
         for (t in tabs) {
@@ -307,35 +344,52 @@ class MainActivity : Activity(), TeronMeshEngine.Listener, TeronAudioEngine.List
             val item = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
-                background = if (active) {
-                    Theme.roundedBg(Theme.withAlpha(Theme.accentIndigo, 38), Theme.dp(this@MainActivity, 14).toFloat())
-                } else null
-                setPadding(0, Theme.dp(this@MainActivity, 5), 0, Theme.dp(this@MainActivity, 5))
+                setPadding(0, Theme.dp(this@MainActivity, 4), 0, Theme.dp(this@MainActivity, 4))
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                 setOnClickListener {
                     if (currentTab == t.idx) {
-                        // Reset nested sub-screen if tapping active tab
                         if (t.idx == 1) { messengerScreen.activeConversationId = null; messengerScreen.render() }
-                        if (t.idx == 4) { ecosystemScreen.activeModule = null; ecosystemScreen.render() }
+                        if (t.idx == 4) { ecosystemScreen.activeSubApp = 0; ecosystemScreen.render() }
                     } else {
                         switchTab(t.idx, null)
                     }
                 }
             }
 
-            val iconLabel = if (t.badge > 0) "${t.icon}•${t.badge}" else t.icon
-            item.addView(TextView(this).apply {
-                text = iconLabel
-                textSize = if (t.badge > 0) 14f else 18f
-                setTextColor(if (t.badge > 0) Theme.accentCyan else Theme.textPrimary)
-                gravity = Gravity.CENTER
-            })
+            val iconPill = FrameLayout(this).apply {
+                val w = Theme.dp(this@MainActivity, 52)
+                val h = Theme.dp(this@MainActivity, 28)
+                layoutParams = LinearLayout.LayoutParams(w, h)
+                if (active) {
+                    background = Theme.roundedBg(Theme.withAlpha(Theme.brand, 36), Theme.dp(this@MainActivity, 14).toFloat())
+                }
+            }
+            iconPill.addView(
+                Components.icon(this, t.iconRes, 20, if (active) Theme.brandText else Theme.textSecondary).apply {
+                    layoutParams = FrameLayout.LayoutParams(Theme.dp(this@MainActivity, 20), Theme.dp(this@MainActivity, 20), Gravity.CENTER)
+                }
+            )
+            if (t.badge > 0) {
+                iconPill.addView(TextView(this).apply {
+                    text = if (t.badge > 99) "99+" else t.badge.toString()
+                    setTextColor(Color.WHITE)
+                    textSize = 9.5f
+                    typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+                    gravity = Gravity.CENTER
+                    background = Theme.roundedBg(Theme.brand, Theme.dp(this@MainActivity, 8).toFloat())
+                    setPadding(Theme.dp(this@MainActivity, 5), Theme.dp(this@MainActivity, 1), Theme.dp(this@MainActivity, 5), Theme.dp(this@MainActivity, 1))
+                    layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END)
+                })
+            }
+            item.addView(iconPill)
+
             item.addView(TextView(this).apply {
                 text = t.title
                 textSize = 11f
-                paint.isFakeBoldText = active
-                setTextColor(if (active) Theme.accentCyan else Theme.textSecondary)
+                typeface = Typeface.create(if (active) "sans-serif-medium" else "sans-serif", Typeface.NORMAL)
+                setTextColor(if (active) Theme.brandText else Theme.textSecondary)
                 gravity = Gravity.CENTER
+                setPadding(0, Theme.dp(this@MainActivity, 2), 0, 0)
             })
             bottomNavBar.addView(item)
         }
@@ -348,12 +402,23 @@ class MainActivity : Activity(), TeronMeshEngine.Listener, TeronAudioEngine.List
             onRequestCameraPermission = {
                 requestPermissions(arrayOf(Manifest.permission.CAMERA), REQ_PERMS_CAM)
             },
+            onRequestPhoneContactPicker = { openPhoneContactPicker() },
             onContactAdded = { contact ->
                 switchTab(1, contact.nodeId)
             }
         )
         dlg.show()
         if (scanTab) dlg.switchTab(1)
+    }
+
+    private fun openPhoneContactPicker() {
+        try {
+            val intent = Intent(Intent.ACTION_PICK, ContactsContract.CommonDataKinds.Phone.CONTENT_URI)
+            @Suppress("DEPRECATION")
+            startActivityForResult(intent, REQ_PICK_PHONE_CONTACT)
+        } catch (e: Exception) {
+            Toast.makeText(this, "Не удалось открыть телефонную книгу: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun openSunCodeGalleryPicker() {
@@ -407,37 +472,19 @@ class MainActivity : Activity(), TeronMeshEngine.Listener, TeronAudioEngine.List
         if (checkSelfPermission(perm) == PackageManager.PERMISSION_GRANTED) {
             app.audioEngine.reloadLibrary()
             musicScreen.render()
-            Toast.makeText(this, "Фонотека обновлена (всего треков: ${app.audioEngine.tracks.size})", Toast.LENGTH_SHORT).show()
+            val localCount = app.audioEngine.tracks.count { !it.isBuiltInSynth }
+            Toast.makeText(this, "Медиатека обновлена (аудиофайлов на устройстве: $localCount)", Toast.LENGTH_SHORT).show()
         } else {
             requestPermissions(arrayOf(perm), REQ_PERMS_AUDIO)
         }
     }
 
-    private fun requestAllPermissions() {
-        val perms = mutableListOf(Manifest.permission.CAMERA)
-        if (Build.VERSION.SDK_INT >= 31) {
-            perms.add(Manifest.permission.BLUETOOTH_SCAN)
-            perms.add(Manifest.permission.BLUETOOTH_ADVERTISE)
-            perms.add(Manifest.permission.BLUETOOTH_CONNECT)
-        } else {
-            perms.add(Manifest.permission.ACCESS_FINE_LOCATION)
-        }
-        if (Build.VERSION.SDK_INT >= 33) {
-            perms.add(Manifest.permission.READ_MEDIA_AUDIO)
-            perms.add(Manifest.permission.NEARBY_WIFI_DEVICES)
-            perms.add(Manifest.permission.POST_NOTIFICATIONS)
-        } else {
-            perms.add(Manifest.permission.READ_EXTERNAL_STORAGE)
-        }
-        requestPermissions(perms.toTypedArray(), REQ_PERMS_ALL)
-    }
-
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (!app.db.isOnboarded()) return
         when (requestCode) {
-            REQ_PERMS_BLE, REQ_PERMS_ALL -> {
+            REQ_PERMS_BLE -> {
                 app.meshEngine.refreshBleTransport()
-                if (requestCode == REQ_PERMS_ALL) app.audioEngine.reloadLibrary()
                 if (currentTab == 1) messengerScreen.render()
                 if (currentTab == 0) switchTab(0, null)
             }
@@ -465,10 +512,10 @@ class MainActivity : Activity(), TeronMeshEngine.Listener, TeronAudioEngine.List
                     val decoded = SunCodeCodec.extractUriFromPngBytes(bytes)
                     if (decoded != null) {
                         app.db.upsertContact(decoded.nodeId, decoded.displayName, decoded.handle, decoded.publicKeyB64)
-                        Toast.makeText(this, "Контакт ${decoded.displayName} импортирован из SunCode!", Toast.LENGTH_LONG).show()
+                        Toast.makeText(this, "Контакт ${decoded.displayName} импортирован из SunCode", Toast.LENGTH_LONG).show()
                         switchTab(1, decoded.nodeId)
                     } else {
-                        Toast.makeText(this, "В этом изображении не найдена метка Teron SunCode", Toast.LENGTH_LONG).show()
+                        Toast.makeText(this, "В выбранном изображении нет метки Teron SunCode", Toast.LENGTH_LONG).show()
                     }
                 } catch (e: Exception) {
                     Toast.makeText(this, "Ошибка чтения файла: ${e.message}", Toast.LENGTH_SHORT).show()
@@ -481,11 +528,41 @@ class MainActivity : Activity(), TeronMeshEngine.Listener, TeronAudioEngine.List
                 app.audioEngine.addPickedDocumentUri(uri)
                 if (currentTab == 3) musicScreen.render()
             }
+            REQ_PICK_PHONE_CONTACT -> {
+                try {
+                    val proj = arrayOf(
+                        ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                        ContactsContract.CommonDataKinds.Phone.NUMBER
+                    )
+                    contentResolver.query(uri, proj, null, null, null)?.use { c ->
+                        if (c.moveToFirst()) {
+                            val name = c.getString(0)?.trim().orEmpty().ifBlank { "Контакт" }
+                            val phone = c.getString(1)?.trim().orEmpty()
+                            val cleanDigits = phone.replace(Regex("[^0-9+]"), "")
+                            val hash = MessageDigest.getInstance("SHA-256")
+                                .digest(cleanDigits.ifEmpty { name }.toByteArray(Charsets.UTF_8))
+                            val tag = hash.take(3).joinToString("") { "%02X".format(it) }
+                            val nodeId = "TRN-$tag"
+                            val handle = "${cleanDigits.trimStart('+').ifEmpty { tag.lowercase(Locale.US) }}@teron.mesh"
+                            app.db.upsertContact(nodeId, name, handle, "")
+                            Toast.makeText(this, "Импортирован контакт: $name ($phone)", Toast.LENGTH_LONG).show()
+                            switchTab(1, nodeId)
+                        }
+                    }
+                } catch (e: Exception) {
+                    Toast.makeText(this, "Ошибка чтения контакта: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
         }
     }
 
     @Deprecated("Overrides Android Activity back press")
     override fun onBackPressed() {
+        if (!app.db.isOnboarded()) {
+            @Suppress("DEPRECATION")
+            super.onBackPressed()
+            return
+        }
         when (currentTab) {
             1 -> if (messengerScreen.handleBack()) return
             2 -> if (mailScreen.handleBack()) return
@@ -504,6 +581,7 @@ class MainActivity : Activity(), TeronMeshEngine.Listener, TeronAudioEngine.List
         if (::app.isInitialized && app.startupError == null) {
             app.meshEngine.addListener(this)
             app.audioEngine.addListener(this)
+            app.walletEngine.addListener(this)
             uiTickHandler.post(playbackTickRunnable)
         }
     }
@@ -513,33 +591,40 @@ class MainActivity : Activity(), TeronMeshEngine.Listener, TeronAudioEngine.List
         if (::app.isInitialized && app.startupError == null) {
             app.meshEngine.removeListener(this)
             app.audioEngine.removeListener(this)
+            app.walletEngine.removeListener(this)
         }
         super.onPause()
     }
 
-    override fun onDestroy() {
-        if (::ecosystemScreen.isInitialized) {
-            ecosystemScreen.shutdown()
-        }
-        super.onDestroy()
-    }
-
     override fun onMeshStateChanged() {
+        if (!app.db.isOnboarded()) return
         when (currentTab) {
             0 -> switchTab(0, null)
             1 -> messengerScreen.render()
             2 -> mailScreen.render()
-            4 -> if (ecosystemScreen.activeModule == "wallet") ecosystemScreen.render()
+            4 -> if (ecosystemScreen.activeSubApp == 0) ecosystemScreen.render()
         }
         refreshBottomNav()
     }
 
     override fun onPacketDelivered(summary: String) {
-        Toast.makeText(this, "📡 AirMesh: $summary", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, "AirMesh: $summary", Toast.LENGTH_LONG).show()
     }
 
     override fun onAudioStateChanged() {
+        if (!app.db.isOnboarded()) return
         if (currentTab == 3) musicScreen.render()
         refreshMiniPlayer()
+    }
+
+    override fun onWalletUpdated(syncMessage: String?) {
+        if (!app.db.isOnboarded()) return
+        if (syncMessage != null) {
+            Toast.makeText(this, syncMessage, Toast.LENGTH_SHORT).show()
+        }
+        when (currentTab) {
+            0 -> switchTab(0, null)
+            4 -> if (ecosystemScreen.activeSubApp == 0) ecosystemScreen.render()
+        }
     }
 }

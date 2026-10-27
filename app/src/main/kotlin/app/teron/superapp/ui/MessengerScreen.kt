@@ -1,6 +1,7 @@
 package app.teron.superapp.ui
 
-import android.app.AlertDialog
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
@@ -8,14 +9,16 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.EditText
-import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import app.teron.superapp.R
 import app.teron.superapp.TeronApp
 import app.teron.superapp.core.ChatMessage
+import app.teron.superapp.core.TeronCrypto
 import app.teron.superapp.core.Theme
+import app.teron.superapp.suncode.SunCodeCodec
 
 class MessengerScreen(
     private val ctx: Context,
@@ -24,7 +27,7 @@ class MessengerScreen(
     private val onOpenSunCode: (scanTab: Boolean) -> Unit
 ) {
     var activeConversationId: String? = null
-    var activeSubTab: Int = 0 // 0 = Chats, 1 = AirMesh Radar, 2 = Contacts
+    var activeSubTab: Int = 0 // 0 = Dialogs, 1 = AirMesh Radar, 2 = Contacts
 
     private var rootContainer: LinearLayout? = null
 
@@ -74,44 +77,38 @@ class MessengerScreen(
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         }
 
-        // Top Header
+        // Header
         val top = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             val p = Theme.dp(ctx, 16)
-            setPadding(p, Theme.dp(ctx, 12), p, Theme.dp(ctx, 8))
+            setPadding(p, Theme.dp(ctx, 14), p, Theme.dp(ctx, 8))
         }
         top.addView(TextView(ctx).apply {
-            text = "Чаты и AirMesh"
+            text = "Сообщения"
             setTextColor(Theme.textPrimary)
-            textSize = 22f
-            paint.isFakeBoldText = true
+            textSize = 21f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         })
-        top.addView(TextView(ctx).apply {
-            text = "+ SunCode"
-            setTextColor(Color.WHITE)
-            textSize = 13f
-            paint.isFakeBoldText = true
-            background = Theme.rippleButton(ctx, Theme.accentIndigo, 12f)
-            setPadding(Theme.dp(ctx, 12), Theme.dp(ctx, 8), Theme.dp(ctx, 12), Theme.dp(ctx, 8))
-            setOnClickListener { onOpenSunCode(true) }
+        top.addView(Components.secondaryButton(ctx, "Контакт", R.drawable.ic_plus) {
+            showAddContactSheet()
         })
         wrapper.addView(top)
 
-        // Sub-tab chips
+        // Sub-tab filter bar
         val chipRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(Theme.dp(ctx, 16), Theme.dp(ctx, 4), Theme.dp(ctx, 16), Theme.dp(ctx, 10))
         }
         val liveCount = app.meshEngine.livePeers.size
-        chipRow.addView(Components.actionChip(ctx, "💬 Диалоги", activeSubTab == 0) {
+        chipRow.addView(Components.actionChip(ctx, "Диалоги", activeSubTab == 0, R.drawable.ic_chat) {
             activeSubTab = 0; render()
         })
-        chipRow.addView(Components.actionChip(ctx, "📡 Радар ($liveCount)", activeSubTab == 1, Theme.accentEmerald) {
+        chipRow.addView(Components.actionChip(ctx, "Радар ($liveCount)", activeSubTab == 1, R.drawable.ic_radar, Theme.accentEmerald) {
             activeSubTab = 1; render()
         })
-        chipRow.addView(Components.actionChip(ctx, "👥 Контакты", activeSubTab == 2) {
+        chipRow.addView(Components.actionChip(ctx, "Контакты", activeSubTab == 2, R.drawable.ic_users) {
             activeSubTab = 2; render()
         })
         wrapper.addView(chipRow)
@@ -126,23 +123,26 @@ class MessengerScreen(
     }
 
     private fun buildChatsListSubView(): View {
-        val scroll = ScrollView(ctx)
+        val scroll = ScrollView(ctx).apply { isVerticalScrollBarEnabled = false }
         val col = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(Theme.dp(ctx, 16), Theme.dp(ctx, 4), Theme.dp(ctx, 16), Theme.dp(ctx, 20))
         }
 
         val conversations = app.db.getConversations(app.meshEngine.livePeers)
-        for (conv in conversations) {
+        val listCard = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            background = Theme.roundedBg(Theme.card, Theme.dp(ctx, 16).toFloat(), Theme.border, Theme.dp(ctx, 1))
+        }
+
+        conversations.forEachIndexed { idx, conv ->
             val row = LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                background = Theme.rippleCard(ctx, Theme.card, 16f)
-                val p = Theme.dp(ctx, 13)
-                setPadding(p, p, p, p)
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    bottomMargin = Theme.dp(ctx, 9)
-                }
+                background = Theme.rippleSurfaceRow(ctx)
+                val px = Theme.dp(ctx, 14)
+                val py = Theme.dp(ctx, 12)
+                setPadding(px, py, px, py)
                 setOnClickListener {
                     activeConversationId = conv.conversationId
                     app.db.markConversationRead(conv.conversationId)
@@ -150,7 +150,11 @@ class MessengerScreen(
                 }
             }
 
-            row.addView(Components.squircleIcon(ctx, conv.glyph, conv.accentColor, 46, 19f))
+            if (conv.iconRes != 0) {
+                row.addView(Components.tonalIconBadge(ctx, conv.iconRes, conv.accentColor, 44, 20, 12f))
+            } else {
+                row.addView(Components.monogramAvatar(ctx, conv.initials, conv.accentColor, 44, 14.5f))
+            }
 
             val mid = LinearLayout(ctx).apply {
                 orientation = LinearLayout.VERTICAL
@@ -162,13 +166,13 @@ class MessengerScreen(
             mid.addView(TextView(ctx).apply {
                 text = conv.title
                 setTextColor(Theme.textPrimary)
-                textSize = 15.5f
-                paint.isFakeBoldText = true
+                textSize = 15f
+                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
                 maxLines = 1
             })
             mid.addView(TextView(ctx).apply {
                 text = conv.subtitle
-                setTextColor(if (conv.isOnlineNearby) Theme.accentCyan else Theme.textMuted)
+                setTextColor(if (conv.isOnlineNearby && !conv.isChannel) Theme.accentEmerald else Theme.textMuted)
                 textSize = 11.5f
                 maxLines = 1
             })
@@ -185,33 +189,40 @@ class MessengerScreen(
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.END
             }
-            right.addView(TextView(ctx).apply {
-                text = Theme.formatTime(conv.lastTimestampMs)
-                setTextColor(Theme.textMuted)
-                textSize = 11.5f
-            })
+            if (conv.lastTimestampMs > 0L) {
+                right.addView(TextView(ctx).apply {
+                    text = Theme.formatTime(conv.lastTimestampMs)
+                    setTextColor(Theme.textMuted)
+                    textSize = 11f
+                    fontFeatureSettings = "tnum"
+                })
+            }
             if (conv.unreadCount > 0) {
                 right.addView(TextView(ctx).apply {
                     text = conv.unreadCount.toString()
                     setTextColor(Color.WHITE)
-                    textSize = 11.5f
-                    paint.isFakeBoldText = true
+                    textSize = 11f
+                    typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
                     gravity = Gravity.CENTER
-                    background = Theme.circleBg(Theme.accentIndigo)
-                    val s = Theme.dp(ctx, 22)
+                    background = Theme.circleBg(Theme.brand)
+                    val s = Theme.dp(ctx, 20)
                     layoutParams = LinearLayout.LayoutParams(s, s).apply { topMargin = Theme.dp(ctx, 6) }
                 })
             }
             row.addView(right)
-            col.addView(row)
+            listCard.addView(row)
+            if (idx < conversations.lastIndex) {
+                listCard.addView(Components.divider(ctx, 70))
+            }
         }
 
+        col.addView(listCard)
         scroll.addView(col)
         return scroll
     }
 
     private fun buildRadarSubView(): View {
-        val scroll = ScrollView(ctx)
+        val scroll = ScrollView(ctx).apply { isVerticalScrollBarEnabled = false }
         val col = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(Theme.dp(ctx, 16), Theme.dp(ctx, 4), Theme.dp(ctx, 16), Theme.dp(ctx, 24))
@@ -220,7 +231,7 @@ class MessengerScreen(
         if (!app.meshEngine.hasBlePermissions()) {
             val permBanner = LinearLayout(ctx).apply {
                 orientation = LinearLayout.VERTICAL
-                background = Theme.roundedBg(Theme.withAlpha(Theme.accentAmber, 30), Theme.dp(ctx, 16).toFloat(), Theme.accentAmber, Theme.dp(ctx, 1))
+                background = Theme.roundedBg(Theme.card, Theme.dp(ctx, 14).toFloat(), Theme.accentAmber, Theme.dp(ctx, 1))
                 val p = Theme.dp(ctx, 14)
                 setPadding(p, p, p, p)
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
@@ -228,89 +239,99 @@ class MessengerScreen(
                 }
             }
             permBanner.addView(TextView(ctx).apply {
-                text = "⚡ Включите радиоразрешения Bluetooth LE («Устройства рядом»)"
+                text = "Требуется доступ к Bluetooth LE («Устройства рядом»)"
                 setTextColor(Theme.textPrimary)
                 textSize = 14f
-                paint.isFakeBoldText = true
+                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             })
             permBanner.addView(TextView(ctx).apply {
-                text = "Необходимо для прямой передачи сообщений между смартфонами без интернета на дистанции до 200–800 метров."
+                text = "Разрешение необходимо для прямого поиска смартфонов Teron в радиусе 200–800 метров без сотовой сети."
                 setTextColor(Theme.textSecondary)
                 textSize = 12.5f
                 setPadding(0, Theme.dp(ctx, 4), 0, Theme.dp(ctx, 10))
             })
-            permBanner.addView(TextView(ctx).apply {
-                text = "Разрешить радиосвязь AirMesh"
-                setTextColor(Color.WHITE)
-                paint.isFakeBoldText = true
-                gravity = Gravity.CENTER
-                background = Theme.rippleButton(ctx, Theme.accentAmber, 12f)
-                setPadding(Theme.dp(ctx, 14), Theme.dp(ctx, 10), Theme.dp(ctx, 14), Theme.dp(ctx, 10))
-                setOnClickListener { onRequestBlePermissions() }
+            permBanner.addView(Components.primaryButton(ctx, "Предоставить разрешение", R.drawable.ic_bluetooth) {
+                onRequestBlePermissions()
             })
             col.addView(permBanner)
         }
 
-        // Animated Radar Canvas Card
         val me = app.db.getProfile()
         val peersList = app.meshEngine.livePeers.values.sortedBy { it.distanceMeters }
+
         val radarCard = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            background = Theme.roundedBg(Theme.card, Theme.dp(ctx, 22).toFloat(), Theme.border, Theme.dp(ctx, 1))
+            background = Theme.roundedBg(Theme.card, Theme.dp(ctx, 16).toFloat(), Theme.border, Theme.dp(ctx, 1))
             val p = Theme.dp(ctx, 14)
             setPadding(p, p, p, p)
         }
-        val radarView = MeshRadarView(ctx).apply {
+        radarCard.addView(MeshRadarView(ctx).apply {
             selfLabel = me.nodeId
             peers = peersList
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Theme.dp(ctx, 250))
-        }
-        radarCard.addView(radarView)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Theme.dp(ctx, 240))
+        })
 
-        val statsLine = TextView(ctx).apply {
-            text = "Узлов рядом: ${peersList.size}  •  Ретранслировано: ${app.meshEngine.relayedCountSession}  •  В очереди Store&Forward: ${app.db.countPendingRelayPackets()}"
-            setTextColor(Theme.textSecondary)
-            textSize = 12f
-            gravity = Gravity.CENTER
-            setPadding(0, Theme.dp(ctx, 6), 0, Theme.dp(ctx, 10))
-        }
-        radarCard.addView(statsLine)
-
-        val simBtn = TextView(ctx).apply {
-            text = "🧪 Тест эстафеты AirMesh (4 смартфона • 640 м • ECDH)"
-            setTextColor(Color.WHITE)
-            textSize = 13f
-            paint.isFakeBoldText = true
-            gravity = Gravity.CENTER
-            background = Theme.rippleButton(ctx, Theme.accentIndigo, 12f)
-            setPadding(Theme.dp(ctx, 14), Theme.dp(ctx, 11), Theme.dp(ctx, 14), Theme.dp(ctx, 11))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            setOnClickListener {
-                app.meshEngine.runMultiHopFieldSimulation()
-                Toast.makeText(ctx, "Запущена криптографическая эстафета через 3 промежуточных узла!", Toast.LENGTH_SHORT).show()
+        val metaGrid = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = Theme.dp(ctx, 8)
             }
         }
-        radarCard.addView(simBtn)
+        fun statBox(label: String, value: String): View = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            background = Theme.roundedBg(Theme.cardAlt, Theme.dp(ctx, 10).toFloat())
+            setPadding(Theme.dp(ctx, 8), Theme.dp(ctx, 8), Theme.dp(ctx, 8), Theme.dp(ctx, 8))
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                leftMargin = Theme.dp(ctx, 3)
+                rightMargin = Theme.dp(ctx, 3)
+            }
+            addView(TextView(ctx).apply {
+                text = value
+                setTextColor(Theme.textPrimary)
+                textSize = 13.5f
+                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                fontFeatureSettings = "tnum"
+            })
+            addView(TextView(ctx).apply {
+                text = label
+                setTextColor(Theme.textMuted)
+                textSize = 10.5f
+            })
+        }
+        metaGrid.addView(statBox("Локальный IP", app.meshEngine.getLocalIpv4()))
+        metaGrid.addView(statBox("Ретрансляций", app.meshEngine.relayedCountSession.toString()))
+        metaGrid.addView(statBox("В очереди", app.db.countPendingRelayPackets().toString()))
+        radarCard.addView(metaGrid)
+
+        radarCard.addView(Components.secondaryButton(ctx, "Обновить сканирование эфира", R.drawable.ic_refresh) {
+            app.meshEngine.refreshBleTransport()
+            Toast.makeText(ctx, "Сканирование Bluetooth LE и Wi-Fi LAN обновлено", Toast.LENGTH_SHORT).show()
+            render()
+        }.apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = Theme.dp(ctx, 10)
+            }
+        })
         col.addView(radarCard)
 
-        // Nearby Peers List
-        col.addView(Components.sectionHeader(ctx, "УСТРОЙСТВА В РАДИУСЕ ДЕЙСТВИЯ (${peersList.size})"))
+        col.addView(Components.sectionHeader(ctx, "Обнаруженные узлы (${peersList.size})"))
         if (peersList.isEmpty()) {
-            col.addView(TextView(ctx).apply {
-                text = "Пока нет других смартфонов с Teron поблизости. Откройте Teron на втором телефоне (Bluetooth или общий Wi-Fi/Хот-спот без интернета) или запустите тест эстафеты выше."
-                setTextColor(Theme.textSecondary)
-                textSize = 13f
-                background = Theme.roundedBg(Theme.card, Theme.dp(ctx, 14).toFloat(), Theme.border, Theme.dp(ctx, 1))
-                val p = Theme.dp(ctx, 14)
-                setPadding(p, p, p, p)
-            })
+            col.addView(Components.emptyStateCard(
+                ctx = ctx,
+                iconRes = R.drawable.ic_wifi,
+                title = "Устройств поблизости не обнаружено",
+                subtitle = "Запустите Teron на втором смартфоне с включённым Bluetooth или в одной локальной сети Wi-Fi / точки доступа.",
+                ctaLabel = "Обменяться SunCode",
+                onCtaClick = { onOpenSunCode(false) }
+            ))
         } else {
             for (p in peersList) {
                 val pCard = LinearLayout(ctx).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
-                    background = Theme.rippleCard(ctx, Theme.card, 15f)
+                    background = Theme.rippleCard(ctx, Theme.card, 14f, Theme.border, 1f)
                     val pad = Theme.dp(ctx, 12)
                     setPadding(pad, pad, pad, pad)
                     layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
@@ -321,7 +342,7 @@ class MessengerScreen(
                         render()
                     }
                 }
-                pCard.addView(Components.squircleIcon(ctx, "📶", Theme.accentEmerald, 42, 18f))
+                pCard.addView(Components.tonalIconBadge(ctx, R.drawable.ic_radar, Theme.accentEmerald, 40, 18, 10f))
                 val info = LinearLayout(ctx).apply {
                     orientation = LinearLayout.VERTICAL
                     layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
@@ -332,30 +353,29 @@ class MessengerScreen(
                     text = "${p.displayName} (${p.nodeId})"
                     setTextColor(Theme.textPrimary)
                     textSize = 14.5f
-                    paint.isFakeBoldText = true
+                    typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
                 })
                 info.addView(TextView(ctx).apply {
-                    text = "${p.transport} • RSSI ${p.rssi} дБм • ~${p.distanceMeters} м • Переходов: ${p.hops}"
-                    setTextColor(Theme.accentCyan)
+                    text = "${p.transport} • ${p.rssi} дБм • ~${p.distanceMeters} м • Переходов: ${p.hops}"
+                    setTextColor(Theme.textSecondary)
                     textSize = 12f
                 })
                 pCard.addView(info)
-                pCard.addView(Components.pillBadge(ctx, "Чат →", Theme.accentIndigo))
+                pCard.addView(Components.icon(ctx, R.drawable.ic_chevron_right, 18, Theme.textMuted))
                 col.addView(pCard)
             }
         }
 
-        // Live Telemetry Log
-        col.addView(Components.sectionHeader(ctx, "ЖУРНАЛ РАДИОПРОТОКОЛА AIRMESH"))
+        col.addView(Components.sectionHeader(ctx, "Системный журнал радиомодуля"))
         val logText = synchronized(app.meshEngine.telemetryLogs) {
-            app.meshEngine.telemetryLogs.take(12).joinToString("\n").ifBlank { "Инициализация радиомодулей…" }
+            app.meshEngine.telemetryLogs.take(12).joinToString("\n").ifBlank { "Инициализация сетевых интерфейсов…" }
         }
         col.addView(TextView(ctx).apply {
             text = logText
-            setTextColor(Theme.accentCyan)
+            setTextColor(Theme.textSecondary)
             textSize = 11.5f
             typeface = Typeface.MONOSPACE
-            background = Theme.roundedBg(0xFF070B14.toInt(), Theme.dp(ctx, 14).toFloat(), Theme.border, Theme.dp(ctx, 1))
+            background = Theme.roundedBg(Theme.card, Theme.dp(ctx, 12).toFloat(), Theme.border, Theme.dp(ctx, 1))
             val p = Theme.dp(ctx, 12)
             setPadding(p, p, p, p)
         })
@@ -365,54 +385,68 @@ class MessengerScreen(
     }
 
     private fun buildContactsSubView(): View {
-        val scroll = ScrollView(ctx)
+        val scroll = ScrollView(ctx).apply { isVerticalScrollBarEnabled = false }
         val col = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(Theme.dp(ctx, 16), Theme.dp(ctx, 4), Theme.dp(ctx, 16), Theme.dp(ctx, 20))
         }
 
-        val addCard = TextView(ctx).apply {
-            text = "☀ Отсканировать или поделиться SunCode контактом"
-            setTextColor(Color.WHITE)
-            textSize = 14f
-            paint.isFakeBoldText = true
-            gravity = Gravity.CENTER
-            background = Theme.rippleButton(ctx, Theme.accentIndigo, 14f)
-            setPadding(Theme.dp(ctx, 14), Theme.dp(ctx, 13), Theme.dp(ctx, 14), Theme.dp(ctx, 13))
+        val btnRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                 bottomMargin = Theme.dp(ctx, 12)
             }
-            setOnClickListener { onOpenSunCode(false) }
         }
-        col.addView(addCard)
+        btnRow.addView(Components.primaryButton(ctx, "Сканировать SunCode", R.drawable.ic_camera) {
+            onOpenSunCode(true)
+        }.apply {
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                rightMargin = Theme.dp(ctx, 8)
+            }
+        })
+        btnRow.addView(Components.secondaryButton(ctx, "По ID узла", R.drawable.ic_plus) {
+            showAddContactSheet()
+        }.apply {
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 0.85f)
+        })
+        col.addView(btnRow)
 
         val contacts = app.db.getContacts()
         if (contacts.isEmpty()) {
-            col.addView(TextView(ctx).apply {
-                text = "Список доверенных контактов пуст. Обменяйтесь лучевыми SunCode-кодами или найдите устройства рядом через Радар AirMesh."
-                setTextColor(Theme.textSecondary)
-                textSize = 13.5f
-                background = Theme.roundedBg(Theme.card, Theme.dp(ctx, 16).toFloat(), Theme.border, Theme.dp(ctx, 1))
-                val p = Theme.dp(ctx, 16)
-                setPadding(p, p, p, p)
-            })
+            col.addView(Components.emptyStateCard(
+                ctx = ctx,
+                iconRes = R.drawable.ic_users,
+                title = "Нет сохранённых контактов",
+                subtitle = "Отсканируйте SunCode собеседника камерой, импортируйте карточку или добавьте ID узла вручную."
+            ))
         } else {
-            for (c in contacts) {
+            val group = LinearLayout(ctx).apply {
+                orientation = LinearLayout.VERTICAL
+                background = Theme.roundedBg(Theme.card, Theme.dp(ctx, 16).toFloat(), Theme.border, Theme.dp(ctx, 1))
+            }
+            contacts.forEachIndexed { idx, c ->
                 val row = LinearLayout(ctx).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
-                    background = Theme.rippleCard(ctx, Theme.card, 16f)
-                    val p = Theme.dp(ctx, 12)
+                    background = Theme.rippleSurfaceRow(ctx)
+                    val p = Theme.dp(ctx, 13)
                     setPadding(p, p, p, p)
-                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                        bottomMargin = Theme.dp(ctx, 8)
-                    }
                     setOnClickListener {
                         activeConversationId = c.nodeId
                         render()
                     }
+                    setOnLongClickListener {
+                        TeronSheets.showBottomSheet(ctx, c.displayName, "${c.handle} • ${c.nodeId}") { dlg, sheet ->
+                            sheet.addView(Components.primaryButton(ctx, "Удалить из контактов", R.drawable.ic_trash, Theme.accentCoral) {
+                                app.db.deleteContact(c.nodeId)
+                                dlg.dismiss()
+                                render()
+                            })
+                        }
+                        true
+                    }
                 }
-                row.addView(Components.squircleIcon(ctx, c.displayName.take(1).uppercase(), Theme.accentCyan, 44, 18f))
+                row.addView(Components.monogramAvatar(ctx, c.displayName, Theme.avatarPalette[(c.nodeId.hashCode() and 0x7FFFFFFF) % Theme.avatarPalette.size], 42, 14f))
                 val info = LinearLayout(ctx).apply {
                     orientation = LinearLayout.VERTICAL
                     layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
@@ -423,7 +457,7 @@ class MessengerScreen(
                     text = c.displayName
                     setTextColor(Theme.textPrimary)
                     textSize = 15f
-                    paint.isFakeBoldText = true
+                    typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
                 })
                 info.addView(TextView(ctx).apply {
                     text = "${c.handle} • ${c.nodeId}"
@@ -431,12 +465,57 @@ class MessengerScreen(
                     textSize = 12f
                 })
                 row.addView(info)
-                row.addView(Components.pillBadge(ctx, "Написать", Theme.accentIndigo))
-                col.addView(row)
+                row.addView(Components.icon(ctx, R.drawable.ic_chevron_right, 18, Theme.textMuted))
+                group.addView(row)
+                if (idx < contacts.lastIndex) group.addView(Components.divider(ctx, 67))
             }
+            col.addView(group)
         }
         scroll.addView(col)
         return scroll
+    }
+
+    private fun showAddContactSheet() {
+        TeronSheets.showBottomSheet(ctx, "Добавить контакт", "По ссылке teron:// или идентификатору узла AirMesh") { dlg, col ->
+            val idField = Components.labeledInput(ctx, "ID узла или ссылка teron://", "TRN-A1B2C3D4 или teron://contact?...")
+            val nameField = Components.labeledInput(ctx, "Имя контакта", "Например: Дмитрий")
+            val handleField = Components.labeledInput(ctx, "Почтовый адрес (необязательно)", "dmitry@teron.mesh")
+
+            col.addView(idField.container)
+            col.addView(nameField.container)
+            col.addView(handleField.container)
+
+            col.addView(Components.primaryButton(ctx, "Сохранить контакт", R.drawable.ic_check) {
+                val raw = idField.input.text.toString().trim()
+                val decoded = SunCodeCodec.decodeUri(raw)
+                if (decoded != null) {
+                    app.db.upsertContact(decoded.nodeId, nameField.input.text.toString().ifBlank { decoded.displayName }, decoded.handle, decoded.publicKeyB64)
+                    dlg.dismiss()
+                    activeConversationId = decoded.nodeId
+                    render()
+                    return@primaryButton
+                }
+                val normId = raw.uppercase().let { if (it.startsWith("TRN-")) it else if (it.isNotEmpty()) "TRN-$it" else "" }
+                if (normId.length < 6) {
+                    Toast.makeText(ctx, "Введите корректный ID узла (например TRN-8F20A1B4)", Toast.LENGTH_SHORT).show()
+                    return@primaryButton
+                }
+                val nm = nameField.input.text.toString().trim().ifBlank { normId }
+                app.db.upsertContact(normId, nm, handleField.input.text.toString().trim(), "")
+                dlg.dismiss()
+                activeConversationId = normId
+                render()
+            })
+
+            col.addView(Components.secondaryButton(ctx, "Открыть сканер SunCode", R.drawable.ic_camera) {
+                dlg.dismiss()
+                onOpenSunCode(true)
+            }.apply {
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    topMargin = Theme.dp(ctx, 8)
+                }
+            })
+        }
     }
 
     private fun buildConversationDetail(convId: String): View {
@@ -448,60 +527,67 @@ class MessengerScreen(
         val livePeer = app.meshEngine.livePeers[convId]
         val contact = app.db.getContacts().firstOrNull { it.nodeId == convId }
         val titleStr = when (convId) {
-            "#airmesh" -> "📡 Эфир Поблизости"
-            "#sos" -> "🆘 Экстренный маяк"
-            "notes" -> "🔐 Избранное (Сейф)"
+            "#airmesh" -> "Общий радиоэфир (#airmesh)"
+            "#sos" -> "Экстренный канал (#sos)"
+            "notes" -> "Избранное"
             else -> livePeer?.displayName ?: contact?.displayName ?: convId
         }
         val subStr = when {
-            convId == "#airmesh" -> "Шифрование канала AES-256-GCM • ${app.meshEngine.livePeers.size} узлов"
-            convId == "#sos" -> "Приоритетная эстафета до 6 переходов без сети"
-            convId == "notes" -> "Хранится локально на устройстве"
-            livePeer != null -> "${livePeer.transport} • ~${livePeer.distanceMeters} м • E2EE ECDH"
-            else -> "Store & Forward очередь • E2EE ECDH P-256"
+            convId == "#airmesh" -> "AES-256-GCM • ${app.meshEngine.livePeers.size} узлов в радиусе"
+            convId == "#sos" -> "Приоритетная ретрансляция до 6 переходов"
+            convId == "notes" -> "Зашифровано на устройстве"
+            livePeer != null -> "${livePeer.transport} • ~${livePeer.distanceMeters} м • ECDH P-256"
+            else -> "Очередь Store & Forward • ECDH P-256"
         }
 
-        // Chat Top Bar
+        // Top Bar
         val topBar = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             background = Theme.roundedBg(Theme.bgElevated, 0f, Theme.border, Theme.dp(ctx, 1))
-            setPadding(Theme.dp(ctx, 12), Theme.dp(ctx, 10), Theme.dp(ctx, 12), Theme.dp(ctx, 10))
+            setPadding(Theme.dp(ctx, 10), Theme.dp(ctx, 10), Theme.dp(ctx, 12), Theme.dp(ctx, 10))
         }
-        val backBtn = TextView(ctx).apply {
-            text = "← Назад"
-            setTextColor(Theme.accentCyan)
-            textSize = 14.5f
-            paint.isFakeBoldText = true
-            setPadding(Theme.dp(ctx, 8), Theme.dp(ctx, 6), Theme.dp(ctx, 12), Theme.dp(ctx, 6))
-            setOnClickListener {
-                activeConversationId = null
-                render()
-            }
+        val backBtn = Components.solidIconButton(ctx, R.drawable.ic_arrow_left, Theme.cardAlt, Theme.textPrimary, 38, 18, 10f) {
+            activeConversationId = null
+            render()
         }
         val titleBox = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                leftMargin = Theme.dp(ctx, 10)
+            }
         }
         titleBox.addView(TextView(ctx).apply {
             text = titleStr
             setTextColor(Theme.textPrimary)
-            textSize = 16.5f
-            paint.isFakeBoldText = true
+            textSize = 16f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             maxLines = 1
         })
         titleBox.addView(TextView(ctx).apply {
             text = subStr
-            setTextColor(Theme.accentEmerald)
+            setTextColor(if (livePeer != null || convId == "notes") Theme.accentEmerald else Theme.textSecondary)
             textSize = 11.5f
             maxLines = 1
         })
         topBar.addView(backBtn)
         topBar.addView(titleBox)
+
+        val peerKey = livePeer?.publicKeyB64?.takeIf { it.isNotBlank() } ?: contact?.publicKeyB64?.takeIf { it.isNotBlank() }
+        if (peerKey != null) {
+            topBar.addView(Components.solidIconButton(ctx, R.drawable.ic_shield, Theme.cardAlt, Theme.accentEmerald, 36, 17, 10f) {
+                TeronSheets.showInfoSheet(
+                    ctx = ctx,
+                    title = "Верификация ключей E2EE",
+                    bodyText = "Собеседник: $titleStr ($convId)\n\nОтпечаток публичного ключа ECDH P-256:\n${TeronCrypto.fingerprintHex(peerKey)}\n\nСверьте этот код с экраном собеседника при личной встрече."
+                )
+            })
+        }
         wrapper.addView(topBar)
 
-        // Messages ScrollView
+        // Messages List
         val msgScroll = ScrollView(ctx).apply {
+            isVerticalScrollBarEnabled = false
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
         }
         val msgCol = LinearLayout(ctx).apply {
@@ -511,78 +597,47 @@ class MessengerScreen(
         }
 
         val messages = app.db.getMessages(convId)
-        for (m in messages) {
-            msgCol.addView(buildMessageBubble(m))
+        if (messages.isEmpty()) {
+            msgCol.addView(Components.emptyStateCard(
+                ctx = ctx,
+                iconRes = R.drawable.ic_lock,
+                title = "Сообщений пока нет",
+                subtitle = "Все сообщения шифруются алгоритмом AES-256-GCM перед отправкой в эфир или сохранением в очередь Store & Forward."
+            ))
+        } else {
+            for (m in messages) {
+                msgCol.addView(buildMessageBubble(m))
+            }
         }
         msgScroll.addView(msgCol)
         msgScroll.post { msgScroll.fullScroll(View.FOCUS_DOWN) }
         wrapper.addView(msgScroll)
 
-        // Quick-reply chips for field / hiking communication
-        val quickScroll = HorizontalScrollView(ctx).apply {
-            isHorizontalScrollBarEnabled = false
-            setPadding(Theme.dp(ctx, 12), Theme.dp(ctx, 4), Theme.dp(ctx, 12), Theme.dp(ctx, 4))
-        }
-        val quickRow = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
-        val presets = listOf(
-            "📡 Проверка связи AirMesh!",
-            "📍 Мы на точке, сети нет",
-            "🔋 Держим связь по цепочке",
-            "👍 Принято!"
-        )
-        for (preset in presets) {
-            quickRow.addView(TextView(ctx).apply {
-                text = preset
-                setTextColor(Theme.textSecondary)
-                textSize = 12f
-                background = Theme.rippleCard(ctx, Theme.cardAlt, 10f)
-                setPadding(Theme.dp(ctx, 10), Theme.dp(ctx, 6), Theme.dp(ctx, 10), Theme.dp(ctx, 6))
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    rightMargin = Theme.dp(ctx, 6)
-                }
-                setOnClickListener {
-                    app.meshEngine.sendChatMessage(convId, preset)
-                    render()
-                }
-            })
-        }
-        quickScroll.addView(quickRow)
-        wrapper.addView(quickScroll)
-
         // Composer Row
         val composer = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = Theme.roundedBg(Theme.bgElevated, 0f)
+            background = Theme.roundedBg(Theme.bgElevated, 0f, Theme.border, Theme.dp(ctx, 1))
             setPadding(Theme.dp(ctx, 12), Theme.dp(ctx, 8), Theme.dp(ctx, 12), Theme.dp(ctx, 10))
         }
         val edit = EditText(ctx).apply {
-            hint = "Зашифрованное сообщение…"
+            hint = "Сообщение…"
             setHintTextColor(Theme.textMuted)
             setTextColor(Theme.textPrimary)
             textSize = 14.5f
             maxLines = 4
-            background = Theme.roundedBg(Theme.card, Theme.dp(ctx, 18).toFloat(), Theme.border, Theme.dp(ctx, 1))
+            background = Theme.roundedBg(Theme.cardAlt, Theme.dp(ctx, 12).toFloat(), Theme.border, Theme.dp(ctx, 1))
             setPadding(Theme.dp(ctx, 14), Theme.dp(ctx, 10), Theme.dp(ctx, 14), Theme.dp(ctx, 10))
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
                 rightMargin = Theme.dp(ctx, 8)
             }
         }
-        val sendBtn = TextView(ctx).apply {
-            text = "➤"
-            setTextColor(Color.WHITE)
-            textSize = 18f
-            gravity = Gravity.CENTER
-            background = Theme.rippleButton(ctx, Theme.accentIndigo, 22f)
-            val s = Theme.dp(ctx, 44)
-            layoutParams = LinearLayout.LayoutParams(s, s)
-            setOnClickListener {
-                val txt = edit.text.toString().trim()
-                if (txt.isNotEmpty()) {
-                    edit.setText("")
-                    app.meshEngine.sendChatMessage(convId, txt)
-                    render()
-                }
+        val sendBtn = Components.solidIconButton(ctx, R.drawable.ic_send, Theme.brand, Color.WHITE, 42, 18, 12f) {
+            val txt = edit.text.toString().trim()
+            if (txt.isNotEmpty()) {
+                edit.setText("")
+                app.meshEngine.sendChatMessage(convId, txt)
+                render()
             }
         }
         composer.addView(edit)
@@ -597,34 +652,34 @@ class MessengerScreen(
             orientation = LinearLayout.VERTICAL
             gravity = if (m.isOutgoing) Gravity.END else Gravity.START
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                bottomMargin = Theme.dp(ctx, 10)
+                bottomMargin = Theme.dp(ctx, 8)
             }
         }
 
-        val bubbleColor = if (m.isOutgoing) Theme.accentIndigo else Theme.card
+        val bubbleColor = if (m.isOutgoing) Theme.brand else Theme.card
         val bubble = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = Theme.roundedBg(
                 bubbleColor,
-                Theme.dp(ctx, 18).toFloat(),
+                Theme.dp(ctx, 14).toFloat(),
                 if (m.isOutgoing) Color.TRANSPARENT else Theme.border,
                 if (m.isOutgoing) 0 else Theme.dp(ctx, 1)
             )
-            val px = Theme.dp(ctx, 14)
-            val py = Theme.dp(ctx, 10)
+            val px = Theme.dp(ctx, 13)
+            val py = Theme.dp(ctx, 9)
             setPadding(px, py, px, py)
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                if (m.isOutgoing) leftMargin = Theme.dp(ctx, 44) else rightMargin = Theme.dp(ctx, 44)
+                if (m.isOutgoing) leftMargin = Theme.dp(ctx, 48) else rightMargin = Theme.dp(ctx, 48)
             }
-            setOnClickListener { showPacketInspectorDialog(m) }
+            setOnClickListener { showPacketInspectorSheet(m) }
         }
 
         if (!m.isOutgoing) {
             bubble.addView(TextView(ctx).apply {
-                text = "${m.senderName} (${m.senderNodeId})"
-                setTextColor(Theme.accentCyan)
-                textSize = 11.5f
-                paint.isFakeBoldText = true
+                text = "${m.senderName} • ${m.senderNodeId}"
+                setTextColor(Theme.brandText)
+                textSize = 11f
+                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             })
         }
 
@@ -638,14 +693,14 @@ class MessengerScreen(
         val metaText = "${Theme.formatTime(m.timestampMs)} • ${m.deliveryState}"
         bubble.addView(TextView(ctx).apply {
             text = metaText
-            setTextColor(if (m.isOutgoing) 0xFFD8D4FF.toInt() else Theme.textMuted)
+            setTextColor(if (m.isOutgoing) 0xFFDBEAFE.toInt() else Theme.textMuted)
             textSize = 10.5f
         })
 
         if (m.hopCount > 0 && m.viaPath.isNotBlank()) {
             bubble.addView(TextView(ctx).apply {
-                text = "Маршрут эстафеты: ${m.viaPath}"
-                setTextColor(if (m.isOutgoing) 0xFFE2E8F0.toInt() else Theme.accentAmber)
+                text = "Маршрут: ${m.viaPath}"
+                setTextColor(if (m.isOutgoing) 0xFFBFDBFE.toInt() else Theme.accentAmber)
                 textSize = 10.5f
             })
         }
@@ -654,21 +709,45 @@ class MessengerScreen(
         return outer
     }
 
-    private fun showPacketInspectorDialog(m: ChatMessage) {
+    private fun showPacketInspectorSheet(m: ChatMessage) {
         val details = buildString {
-            appendLine("ID пакета: ${m.packetId}")
+            appendLine("Пакет: ${m.packetId}")
             appendLine("Отправитель: ${m.senderName} (${m.senderNodeId})")
             appendLine("Транспорт: ${m.transport}")
             appendLine("Переходов (Hops): ${m.hopCount}")
-            appendLine("Цепочка ретрансляции: ${m.viaPath.ifBlank { "Прямой канал" }}")
+            appendLine("Цепочка узлов: ${m.viaPath.ifBlank { "Прямой канал" }}")
             appendLine("Статус: ${m.deliveryState}")
-            appendLine("Шифротекст AES-256-GCM: ${m.cipherPreview}")
-            appendLine("Время: ${Theme.formatDateTime(m.timestampMs)}")
+            appendLine("Шифротекст: ${m.cipherPreview}")
+            append("Время: ${Theme.formatDateTime(m.timestampMs)}")
         }
-        AlertDialog.Builder(ctx)
-            .setTitle("🔐 Криптопаспорт пакета AirMesh")
-            .setMessage(details)
-            .setPositiveButton("ОК", null)
-            .show()
+        TeronSheets.showBottomSheet(ctx, "Паспорт пакета", "Детали шифрования и доставки") { dlg, col ->
+            col.addView(TextView(ctx).apply {
+                text = details
+                setTextColor(Theme.textSecondary)
+                textSize = 12.5f
+                typeface = Typeface.MONOSPACE
+                setLineSpacing(Theme.dp(ctx, 2).toFloat(), 1.05f)
+                setPadding(0, 0, 0, Theme.dp(ctx, 14))
+            })
+            val row = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
+            row.addView(Components.secondaryButton(ctx, "Копировать текст", R.drawable.ic_copy) {
+                val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(ClipData.newPlainText("Message", m.body))
+                Toast.makeText(ctx, "Текст скопирован", Toast.LENGTH_SHORT).show()
+                dlg.dismiss()
+            }.apply {
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    rightMargin = Theme.dp(ctx, 8)
+                }
+            })
+            row.addView(Components.primaryButton(ctx, "Удалить", R.drawable.ic_trash, Theme.accentCoral) {
+                app.db.deleteMessage(m.id)
+                dlg.dismiss()
+                render()
+            }.apply {
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 0.8f)
+            })
+            col.addView(row)
+        }
     }
 }

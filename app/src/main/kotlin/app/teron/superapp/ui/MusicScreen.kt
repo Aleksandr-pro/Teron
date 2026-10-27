@@ -2,15 +2,17 @@ package app.teron.superapp.ui
 
 import android.content.Context
 import android.graphics.Color
-import android.graphics.drawable.GradientDrawable
+import android.graphics.Typeface
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
+import app.teron.superapp.R
 import app.teron.superapp.TeronApp
 import app.teron.superapp.core.Theme
 
@@ -20,7 +22,7 @@ class MusicScreen(
     private val onRequestAudioPermissionAndScan: () -> Unit,
     private val onOpenAudioFilePicker: () -> Unit
 ) {
-    private var filterMode = 0 // 0=All, 1=Offline Synth, 2=Phone Files, 3=Favorites
+    private var filterMode = 0 // 0=All, 1=Device Audio, 2=Favorites, 3=Ambient DSP
     private var rootContainer: LinearLayout? = null
     private var seekBarRef: SeekBar? = null
     private var timeLabelRef: TextView? = null
@@ -61,35 +63,29 @@ class MusicScreen(
         }
         val col = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(Theme.dp(ctx, 16), Theme.dp(ctx, 12), Theme.dp(ctx, 16), Theme.dp(ctx, 24))
+            setPadding(Theme.dp(ctx, 16), Theme.dp(ctx, 14), Theme.dp(ctx, 16), Theme.dp(ctx, 24))
         }
 
-        // Header
+        // Top Bar
         val top = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
         top.addView(TextView(ctx).apply {
-            text = "Teron Sound"
+            text = "Аудиоплеер"
             setTextColor(Theme.textPrimary)
-            textSize = 22f
-            paint.isFakeBoldText = true
+            textSize = 21f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         })
-        top.addView(Components.pillBadge(ctx, "Офлайн Hi-Fi", Theme.accentPink))
+        val localCount = engine.tracks.count { !it.isBuiltInSynth }
+        top.addView(Components.pillBadge(ctx, "На устройстве: $localCount", Theme.textSecondary))
         col.addView(top)
 
-        // Hero Player Card
-        val accent = cur?.accentColor ?: Theme.accentIndigo
-        val hero = LinearLayout(ctx).apply {
+        // Player Surface Card (clean Graphite / Pure Slate card — zero neon gradient)
+        val playerCard = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            background = Theme.gradientBg(
-                intArrayOf(Theme.withAlpha(accent, 110), 0xFF141B30.toInt(), 0xFF0B1020.toInt()),
-                Theme.dp(ctx, 24).toFloat(),
-                GradientDrawable.Orientation.TL_BR,
-                Theme.withAlpha(accent, 130),
-                Theme.dp(ctx, 1)
-            )
+            background = Theme.roundedBg(Theme.card, Theme.dp(ctx, 18).toFloat(), Theme.border, Theme.dp(ctx, 1))
             val p = Theme.dp(ctx, 18)
             setPadding(p, p, p, p)
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
@@ -101,57 +97,62 @@ class MusicScreen(
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        trackRow.addView(Components.squircleIcon(ctx, "🎵", accent, 52, 24f))
+        trackRow.addView(Components.tonalIconBadge(ctx, R.drawable.ic_music, Theme.brandText, 50, 24, 14f))
         val metaCol = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
                 leftMargin = Theme.dp(ctx, 14)
+                rightMargin = Theme.dp(ctx, 8)
             }
         }
         metaCol.addView(TextView(ctx).apply {
-            text = cur?.title ?: "Выберите трек"
-            setTextColor(Color.WHITE)
-            textSize = 18f
-            paint.isFakeBoldText = true
+            text = cur?.title ?: "Выберите композицию"
+            setTextColor(Theme.textPrimary)
+            textSize = 17f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             maxLines = 1
         })
         metaCol.addView(TextView(ctx).apply {
-            text = cur?.artist ?: "Офлайн-фонотека"
-            setTextColor(0xFFCBD5E1.toInt())
+            text = cur?.artist ?: "Локальная фонотека"
+            setTextColor(Theme.textSecondary)
             textSize = 13f
             maxLines = 1
         })
         metaCol.addView(TextView(ctx).apply {
-            text = cur?.genre ?: ""
-            setTextColor(Theme.accentCyan)
+            text = cur?.album ?: ""
+            setTextColor(Theme.textMuted)
             textSize = 11.5f
+            maxLines = 1
         })
         trackRow.addView(metaCol)
 
         if (cur != null) {
-            trackRow.addView(TextView(ctx).apply {
-                text = if (cur.isFavorite) "❤️" else "🤍"
-                textSize = 22f
-                setPadding(Theme.dp(ctx, 8), Theme.dp(ctx, 8), Theme.dp(ctx, 4), Theme.dp(ctx, 8))
-                setOnClickListener {
-                    engine.toggleFavorite(cur)
-                    render()
-                }
+            trackRow.addView(Components.solidIconButton(
+                ctx = ctx,
+                resId = if (cur.isFavorite) R.drawable.ic_heart_filled else R.drawable.ic_heart,
+                bgColor = Theme.cardAlt,
+                iconTint = if (cur.isFavorite) Theme.accentCoral else Theme.textSecondary,
+                boxSizeDp = 38,
+                iconSizeDp = 18,
+                radiusDp = 10f
+            ) {
+                engine.toggleFavorite(cur)
+                render()
             })
         }
-        hero.addView(trackRow)
+        playerCard.addView(trackRow)
 
         // Spectrum Visualizer
         val spec = AudioSpectrumView(ctx).apply {
             activePlaying = engine.isPlaying
-            barColor = accent
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Theme.dp(ctx, 64)).apply {
+            barColor = Theme.brandText
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Theme.dp(ctx, 52)).apply {
                 topMargin = Theme.dp(ctx, 14)
-                bottomMargin = Theme.dp(ctx, 8)
+                bottomMargin = Theme.dp(ctx, 6)
             }
         }
         spectrumRef = spec
-        hero.addView(spec)
+        playerCard.addView(spec)
 
         // SeekBar + Time
         val dur = engine.durationSec.coerceAtLeast(1)
@@ -168,54 +169,62 @@ class MusicScreen(
             })
         }
         seekBarRef = seek
-        hero.addView(seek)
+        playerCard.addView(seek)
 
         val timeTv = TextView(ctx).apply {
             text = "${fmtSec(pos)} / ${fmtSec(dur)}"
-            setTextColor(0xFF94A3B8.toInt())
-            textSize = 12f
+            setTextColor(Theme.textMuted)
+            textSize = 11.5f
+            fontFeatureSettings = "tnum"
             gravity = Gravity.END
-            setPadding(0, 0, Theme.dp(ctx, 6), Theme.dp(ctx, 8))
+            setPadding(0, 0, Theme.dp(ctx, 6), Theme.dp(ctx, 10))
         }
         timeLabelRef = timeTv
-        hero.addView(timeTv)
+        playerCard.addView(timeTv)
 
-        // Transport Controls Row
+        // Vector Transport Controls Row
         val controls = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
         }
-        fun ctrlBtn(lbl: String, big: Boolean = false, active: Boolean = false, action: () -> Unit): TextView =
-            TextView(ctx).apply {
-                text = lbl
-                setTextColor(if (active) Theme.accentCyan else Color.WHITE)
-                textSize = if (big) 22f else 16f
-                paint.isFakeBoldText = true
-                gravity = Gravity.CENTER
-                val sz = Theme.dp(ctx, if (big) 56 else 42)
-                background = if (big) Theme.rippleButton(ctx, accent, 28f) else Theme.rippleCard(ctx, 0x33FFFFFF, 21f, Color.TRANSPARENT, 0f)
-                layoutParams = LinearLayout.LayoutParams(sz, sz).apply {
+        fun transportBtn(iconRes: Int, primary: Boolean = false, active: Boolean = false, action: () -> Unit): FrameLayout {
+            val sz = if (primary) 54 else 42
+            val icSz = if (primary) 22 else 18
+            val bg = when {
+                primary -> Theme.brand
+                active -> Theme.withAlpha(Theme.brand, 38)
+                else -> Theme.cardAlt
+            }
+            val tint = when {
+                primary -> Color.WHITE
+                active -> Theme.brandText
+                else -> Theme.textPrimary
+            }
+            return Components.solidIconButton(ctx, iconRes, bg, tint, sz, icSz, (sz / 2f)) { action() }.apply {
+                (layoutParams as LinearLayout.LayoutParams).apply {
                     leftMargin = Theme.dp(ctx, 6)
                     rightMargin = Theme.dp(ctx, 6)
                 }
-                setOnClickListener { action() }
             }
+        }
 
-        controls.addView(ctrlBtn("🔀", active = engine.isShuffle) {
+        controls.addView(transportBtn(R.drawable.ic_shuffle, active = engine.isShuffle) {
             engine.isShuffle = !engine.isShuffle
             render()
         })
-        controls.addView(ctrlBtn("⏮") { engine.prev() })
-        controls.addView(ctrlBtn(if (engine.isPlaying) "⏸" else "▶", big = true) { engine.togglePlayPause() })
-        controls.addView(ctrlBtn("⏭") { engine.next() })
-        controls.addView(ctrlBtn("🔁", active = engine.isRepeatOne) {
+        controls.addView(transportBtn(R.drawable.ic_skip_prev) { engine.prev() })
+        controls.addView(transportBtn(if (engine.isPlaying) R.drawable.ic_pause else R.drawable.ic_play, primary = true) {
+            engine.togglePlayPause()
+        })
+        controls.addView(transportBtn(R.drawable.ic_skip_next) { engine.next() })
+        controls.addView(transportBtn(R.drawable.ic_repeat, active = engine.isRepeatOne) {
             engine.isRepeatOne = !engine.isRepeatOne
             render()
         })
-        hero.addView(controls)
-        col.addView(hero)
+        playerCard.addView(controls)
+        col.addView(playerCard)
 
-        // Import / Scan Local Phone Music Actions
+        // Library Scan & File Import Row
         val importRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
@@ -223,120 +232,116 @@ class MusicScreen(
                 bottomMargin = Theme.dp(ctx, 10)
             }
         }
-        importRow.addView(TextView(ctx).apply {
-            text = "🔍 Музыка телефона"
-            setTextColor(Theme.textPrimary)
-            textSize = 12.5f
-            paint.isFakeBoldText = true
-            gravity = Gravity.CENTER
-            background = Theme.rippleCard(ctx, Theme.card, 13f)
-            setPadding(Theme.dp(ctx, 10), Theme.dp(ctx, 11), Theme.dp(ctx, 10), Theme.dp(ctx, 11))
+        importRow.addView(Components.secondaryButton(ctx, "Сканировать память", R.drawable.ic_refresh) {
+            onRequestAudioPermissionAndScan()
+        }.apply {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
                 rightMargin = Theme.dp(ctx, 6)
             }
-            setOnClickListener { onRequestAudioPermissionAndScan() }
         })
-        importRow.addView(TextView(ctx).apply {
-            text = "📂 Открыть MP3/WAV"
-            setTextColor(Theme.textPrimary)
-            textSize = 12.5f
-            paint.isFakeBoldText = true
-            gravity = Gravity.CENTER
-            background = Theme.rippleCard(ctx, Theme.card, 13f)
-            setPadding(Theme.dp(ctx, 10), Theme.dp(ctx, 11), Theme.dp(ctx, 10), Theme.dp(ctx, 11))
+        importRow.addView(Components.secondaryButton(ctx, "Открыть аудиофайл", R.drawable.ic_folder) {
+            onOpenAudioFilePicker()
+        }.apply {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
                 leftMargin = Theme.dp(ctx, 6)
             }
-            setOnClickListener { onOpenAudioFilePicker() }
         })
         col.addView(importRow)
 
-        // Filter chips
+        // Category Filter Chips
         val fScroll = HorizontalScrollView(ctx).apply {
             isHorizontalScrollBarEnabled = false
             setPadding(0, Theme.dp(ctx, 2), 0, Theme.dp(ctx, 10))
         }
         val fRow = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
         fRow.addView(Components.actionChip(ctx, "Все (${engine.tracks.size})", filterMode == 0) { filterMode = 0; render() })
-        fRow.addView(Components.actionChip(ctx, "Офлайн-синтез", filterMode == 1, Theme.accentPink) { filterMode = 1; render() })
-        fRow.addView(Components.actionChip(ctx, "На устройстве", filterMode == 2, Theme.accentBlue) { filterMode = 2; render() })
-        fRow.addView(Components.actionChip(ctx, "Избранное ❤️", filterMode == 3, Theme.accentCoral) { filterMode = 3; render() })
+        fRow.addView(Components.actionChip(ctx, "На устройстве ($localCount)", filterMode == 1) { filterMode = 1; render() })
+        fRow.addView(Components.actionChip(ctx, "Избранное", filterMode == 2, R.drawable.ic_heart) { filterMode = 2; render() })
+        fRow.addView(Components.actionChip(ctx, "Ambient DSP", filterMode == 3, R.drawable.ic_waveform) { filterMode = 3; render() })
         fScroll.addView(fRow)
         col.addView(fScroll)
 
-        // Track list
         val filtered = engine.tracks.mapIndexed { idx, t -> idx to t }.filter { (_, t) ->
             when (filterMode) {
-                1 -> t.isBuiltInSynth
-                2 -> !t.isBuiltInSynth
-                3 -> t.isFavorite
+                1 -> !t.isBuiltInSynth
+                2 -> t.isFavorite
+                3 -> t.isBuiltInSynth
                 else -> true
             }
         }
 
         if (filtered.isEmpty()) {
-            col.addView(TextView(ctx).apply {
-                text = "Треки в этой категории не найдены. Нажмите «🔍 Музыка телефона» или «📂 Открыть MP3/WAV», чтобы добавить композиции с вашего устройства."
-                setTextColor(Theme.textSecondary)
-                textSize = 13f
-                background = Theme.roundedBg(Theme.card, Theme.dp(ctx, 14).toFloat(), Theme.border, Theme.dp(ctx, 1))
-                val p = Theme.dp(ctx, 14)
-                setPadding(p, p, p, p)
-            })
+            col.addView(Components.emptyStateCard(
+                ctx = ctx,
+                iconRes = R.drawable.ic_music,
+                title = "Список треков пуст",
+                subtitle = "Предоставьте доступ к медиатеке смартфона или выберите аудиофайл MP3, FLAC, WAV или M4A через проводник.",
+                ctaLabel = "Сканировать медиатеку",
+                onCtaClick = { onRequestAudioPermissionAndScan() }
+            ))
         } else {
-            for ((realIdx, t) in filtered) {
+            val listGroup = LinearLayout(ctx).apply {
+                orientation = LinearLayout.VERTICAL
+                background = Theme.roundedBg(Theme.card, Theme.dp(ctx, 16).toFloat(), Theme.border, Theme.dp(ctx, 1))
+            }
+            filtered.forEachIndexed { idx, (realIdx, t) ->
                 val active = realIdx == engine.currentIndex
-                val itemRow = LinearLayout(ctx).apply {
+                val row = LinearLayout(ctx).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
-                    background = Theme.rippleCard(
-                        ctx,
-                        if (active) Theme.cardAlt else Theme.card,
-                        15f,
-                        if (active) t.accentColor else Theme.border,
-                        1f
-                    )
+                    background = Theme.rippleSurfaceRow(ctx)
                     val p = Theme.dp(ctx, 12)
                     setPadding(p, p, p, p)
-                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                        bottomMargin = Theme.dp(ctx, 8)
-                    }
                     setOnClickListener {
                         if (active) engine.togglePlayPause() else engine.playIndex(realIdx)
                     }
                 }
-                itemRow.addView(Components.squircleIcon(ctx, if (active && engine.isPlaying) "🔊" else "♪", t.accentColor, 42, 18f))
+                row.addView(
+                    Components.tonalIconBadge(
+                        ctx,
+                        if (active && engine.isPlaying) R.drawable.ic_waveform else R.drawable.ic_music,
+                        if (active) Theme.brandText else Theme.textSecondary,
+                        40, 18, 10f
+                    )
+                )
                 val tCol = LinearLayout(ctx).apply {
                     orientation = LinearLayout.VERTICAL
                     layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
                         leftMargin = Theme.dp(ctx, 12)
+                        rightMargin = Theme.dp(ctx, 8)
                     }
                 }
                 tCol.addView(TextView(ctx).apply {
                     text = t.title
-                    setTextColor(Theme.textPrimary)
+                    setTextColor(if (active) Theme.brandText else Theme.textPrimary)
                     textSize = 14.5f
-                    paint.isFakeBoldText = true
+                    typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
                     maxLines = 1
                 })
                 tCol.addView(TextView(ctx).apply {
                     text = "${t.artist} • ${fmtSec(t.durationSec)}"
                     setTextColor(Theme.textSecondary)
                     textSize = 12f
+                    fontFeatureSettings = "tnum"
                     maxLines = 1
                 })
-                itemRow.addView(tCol)
-                itemRow.addView(TextView(ctx).apply {
-                    text = if (t.isFavorite) "❤️" else "🤍"
-                    textSize = 17f
-                    setPadding(Theme.dp(ctx, 8), Theme.dp(ctx, 4), Theme.dp(ctx, 4), Theme.dp(ctx, 4))
+                row.addView(tCol)
+
+                row.addView(Components.icon(
+                    ctx,
+                    if (t.isFavorite) R.drawable.ic_heart_filled else R.drawable.ic_heart,
+                    18,
+                    if (t.isFavorite) Theme.accentCoral else Theme.textMuted
+                ).apply {
                     setOnClickListener {
                         engine.toggleFavorite(t)
                         render()
                     }
                 })
-                col.addView(itemRow)
+                listGroup.addView(row)
+                if (idx < filtered.lastIndex) listGroup.addView(Components.divider(ctx, 64))
             }
+            col.addView(listGroup)
         }
 
         scroll.addView(col)

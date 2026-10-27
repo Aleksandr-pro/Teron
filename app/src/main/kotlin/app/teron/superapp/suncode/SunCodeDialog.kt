@@ -12,6 +12,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.SurfaceTexture
+import android.graphics.Typeface
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
@@ -30,25 +31,30 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import app.teron.superapp.R
 import app.teron.superapp.TeronApp
 import app.teron.superapp.core.TeronFileProvider
 import app.teron.superapp.core.Theme
+import app.teron.superapp.core.UserProfile
+import app.teron.superapp.ui.Components
+import app.teron.superapp.ui.QrCodeView
 import java.io.File
 
 class SunCodeDialog(
     private val activity: Activity,
     private val onRequestGalleryImport: () -> Unit,
     private val onRequestCameraPermission: () -> Unit,
+    private val onRequestPhoneContactPicker: () -> Unit,
     private val onContactAdded: (SunCodeCodec.DecodedContact) -> Unit
 ) : Dialog(activity, android.R.style.Theme_Black_NoTitleBar_Fullscreen) {
 
     private val app = activity.application as TeronApp
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
-    private var mode = 0 // 0 = My Code, 1 = Live Scanner
+    private var mode = 0 // 0 = My Code, 1 = Scanner & Import
+    private var showQrInsteadOfSun = false
     private lateinit var bodyContainer: FrameLayout
-    private lateinit var tabMyBtn: TextView
-    private lateinit var tabScanBtn: TextView
+    private lateinit var tabRow: LinearLayout
 
     init {
         requestWindowFeature(Window.FEATURE_NO_TITLE)
@@ -60,7 +66,7 @@ class SunCodeDialog(
         val root = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Theme.bg)
-            setPadding(Theme.dp(activity, 18), Theme.dp(activity, 28), Theme.dp(activity, 18), Theme.dp(activity, 20))
+            setPadding(Theme.dp(activity, 16), Theme.dp(activity, 20), Theme.dp(activity, 16), Theme.dp(activity, 16))
         }
 
         // Top Bar
@@ -68,57 +74,26 @@ class SunCodeDialog(
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        val title = TextView(activity).apply {
-            text = "Лучевой SunCode"
+        topBar.addView(TextView(activity).apply {
+            text = "Обмен контактами SunCode"
             setTextColor(Theme.textPrimary)
-            textSize = 20f
-            paint.isFakeBoldText = true
+            textSize = 19f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        val closeBtn = TextView(activity).apply {
-            text = "Закрыть"
-            setTextColor(Theme.accentCyan)
-            textSize = 15f
-            setPadding(Theme.dp(activity, 14), Theme.dp(activity, 8), Theme.dp(activity, 14), Theme.dp(activity, 8))
-            background = Theme.rippleCard(activity, Theme.cardAlt, 12f)
-            setOnClickListener { dismiss() }
-        }
-        topBar.addView(title)
-        topBar.addView(closeBtn)
+        })
+        topBar.addView(Components.solidIconButton(activity, R.drawable.ic_close, Theme.cardAlt, Theme.textPrimary, 38, 17, 10f) {
+            dismiss()
+        })
         root.addView(topBar)
 
-        // Mode switcher
-        val switcher = LinearLayout(activity).apply {
+        tabRow = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
-            background = Theme.roundedBg(Theme.cardAlt, Theme.dp(activity, 14).toFloat())
-            val p = Theme.dp(activity, 4)
-            setPadding(p, p, p, p)
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = Theme.dp(activity, 16)
-                bottomMargin = Theme.dp(activity, 14)
+                topMargin = Theme.dp(activity, 14)
+                bottomMargin = Theme.dp(activity, 12)
             }
         }
-        tabMyBtn = TextView(activity).apply {
-            text = "☀ Мой SunCode"
-            gravity = Gravity.CENTER
-            textSize = 14f
-            paint.isFakeBoldText = true
-            setPadding(0, Theme.dp(activity, 10), 0, Theme.dp(activity, 10))
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            setOnClickListener { switchTab(0) }
-        }
-        tabScanBtn = TextView(activity).apply {
-            text = "📷 Сканер камеры"
-            gravity = Gravity.CENTER
-            textSize = 14f
-            paint.isFakeBoldText = true
-            setPadding(0, Theme.dp(activity, 10), 0, Theme.dp(activity, 10))
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            setOnClickListener { switchTab(1) }
-        }
-        switcher.addView(tabMyBtn)
-        switcher.addView(tabScanBtn)
-        root.addView(switcher)
+        root.addView(tabRow)
 
         bodyContainer = FrameLayout(activity).apply {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
@@ -132,10 +107,9 @@ class SunCodeDialog(
     fun switchTab(newMode: Int) {
         mode = newMode
         closeCamera()
-        tabMyBtn.background = if (mode == 0) Theme.roundedBg(Theme.accentIndigo, Theme.dp(activity, 11).toFloat()) else null
-        tabMyBtn.setTextColor(if (mode == 0) Color.WHITE else Theme.textSecondary)
-        tabScanBtn.background = if (mode == 1) Theme.roundedBg(Theme.accentIndigo, Theme.dp(activity, 11).toFloat()) else null
-        tabScanBtn.setTextColor(if (mode == 1) Color.WHITE else Theme.textSecondary)
+        tabRow.removeAllViews()
+        tabRow.addView(Components.actionChip(activity, "Моя карточка", mode == 0, R.drawable.ic_suncode) { switchTab(0) })
+        tabRow.addView(Components.actionChip(activity, "Сканер и импорт", mode == 1, R.drawable.ic_camera) { switchTab(1) })
 
         bodyContainer.removeAllViews()
         if (mode == 0) {
@@ -147,94 +121,99 @@ class SunCodeDialog(
 
     private fun buildMyCodeView(): View {
         val profile = app.db.getProfile()
-        val scroll = ScrollView(activity)
+        val scroll = ScrollView(activity).apply { isVerticalScrollBarEnabled = false }
         val col = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(Theme.dp(activity, 8), Theme.dp(activity, 6), Theme.dp(activity, 8), Theme.dp(activity, 20))
+            setPadding(0, Theme.dp(activity, 4), 0, Theme.dp(activity, 20))
         }
 
         val card = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            background = Theme.roundedBg(Theme.card, Theme.dp(activity, 24).toFloat(), Theme.border, Theme.dp(activity, 1))
+            background = Theme.roundedBg(Theme.card, Theme.dp(activity, 20).toFloat(), Theme.border, Theme.dp(activity, 1))
             val pad = Theme.dp(activity, 20)
             setPadding(pad, pad, pad, pad)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
 
-        val sunView = SunCodeView(activity, profile).apply {
-            layoutParams = LinearLayout.LayoutParams(Theme.dp(activity, 250), Theme.dp(activity, 250))
+        val modeSwitchRow = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = Theme.dp(activity, 12)
+            }
         }
-        card.addView(sunView)
+        modeSwitchRow.addView(Components.actionChip(activity, "SunCode", !showQrInsteadOfSun, R.drawable.ic_suncode) {
+            showQrInsteadOfSun = false
+            switchTab(0)
+        })
+        modeSwitchRow.addView(Components.actionChip(activity, "QR-код", showQrInsteadOfSun, R.drawable.ic_qr) {
+            showQrInsteadOfSun = true
+            switchTab(0)
+        })
+        card.addView(modeSwitchRow)
 
-        val nameTv = TextView(activity).apply {
+        if (showQrInsteadOfSun) {
+            card.addView(QrCodeView(activity, SunCodeCodec.encodeUri(profile)).apply {
+                val sz = Theme.dp(activity, 220)
+                layoutParams = LinearLayout.LayoutParams(sz, sz)
+            })
+        } else {
+            card.addView(SunCodeView(activity, profile).apply {
+                val sz = Theme.dp(activity, 236)
+                layoutParams = LinearLayout.LayoutParams(sz, sz)
+            })
+        }
+
+        card.addView(TextView(activity).apply {
             text = profile.displayName
             setTextColor(Theme.textPrimary)
-            textSize = 21f
-            paint.isFakeBoldText = true
+            textSize = 20f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             gravity = Gravity.CENTER
-            setPadding(0, Theme.dp(activity, 8), 0, Theme.dp(activity, 4))
-        }
-        card.addView(nameTv)
-
-        val handleTv = TextView(activity).apply {
+            setPadding(0, Theme.dp(activity, 12), 0, Theme.dp(activity, 2))
+        })
+        card.addView(TextView(activity).apply {
             text = "${profile.handle} • ${profile.nodeId}"
-            setTextColor(Theme.accentCyan)
-            textSize = 13f
-            gravity = Gravity.CENTER
-        }
-        card.addView(handleTv)
-
-        val descTv = TextView(activity).apply {
-            text = "64 гармонических луча кодируют ваш узел AirMesh и отпечаток публичного ключа ECDH P-256."
-            setTextColor(Theme.textSecondary)
+            setTextColor(Theme.brandText)
             textSize = 12.5f
+            typeface = Typeface.MONOSPACE
+            gravity = Gravity.CENTER
+        })
+        card.addView(TextView(activity).apply {
+            text = "Код содержит ваш публичный ключ ECDH P-256 для сквозного шифрования сообщений и почты AirMesh."
+            setTextColor(Theme.textSecondary)
+            textSize = 12f
             gravity = Gravity.CENTER
             setPadding(Theme.dp(activity, 8), Theme.dp(activity, 10), Theme.dp(activity, 8), 0)
-        }
-        card.addView(descTv)
+        })
         col.addView(card)
 
-        // Share PNG Button
-        val shareBtn = TextView(activity).apply {
-            text = "📤 Поделиться карточкой SunCode (PNG)"
-            setTextColor(Color.WHITE)
-            textSize = 15f
-            paint.isFakeBoldText = true
-            gravity = Gravity.CENTER
-            background = Theme.rippleButton(activity, Theme.accentIndigo, 15f)
-            setPadding(Theme.dp(activity, 16), Theme.dp(activity, 14), Theme.dp(activity, 16), Theme.dp(activity, 14))
+        col.addView(Components.primaryButton(activity, "Поделиться PNG-карточкой", R.drawable.ic_share) {
+            shareSunCodePng(profile)
+        }.apply {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = Theme.dp(activity, 16)
+                topMargin = Theme.dp(activity, 14)
             }
-            setOnClickListener { shareSunCodePng(profile) }
-        }
-        col.addView(shareBtn)
+        })
 
-        val copyBtn = TextView(activity).apply {
-            text = "📋 Скопировать ссылку контакта (teron://)"
-            setTextColor(Theme.textPrimary)
-            textSize = 14f
-            gravity = Gravity.CENTER
-            background = Theme.rippleCard(activity, Theme.cardAlt, 14f)
-            setPadding(Theme.dp(activity, 16), Theme.dp(activity, 13), Theme.dp(activity, 16), Theme.dp(activity, 13))
+        col.addView(Components.secondaryButton(activity, "Скопировать URI контакта (teron://)", R.drawable.ic_copy) {
+            val uri = SunCodeCodec.encodeUri(profile)
+            val cm = activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText("Teron Contact", uri))
+            Toast.makeText(activity, "Ссылка контакта скопирована", Toast.LENGTH_SHORT).show()
+        }.apply {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                 topMargin = Theme.dp(activity, 10)
             }
-            setOnClickListener {
-                val uri = SunCodeCodec.encodeUri(profile)
-                val cm = activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                cm.setPrimaryClip(ClipData.newPlainText("Teron SunCode", uri))
-                Toast.makeText(activity, "SunCode ссылка скопирована!", Toast.LENGTH_SHORT).show()
-            }
-        }
-        col.addView(copyBtn)
+        })
 
         scroll.addView(col)
         return scroll
     }
 
-    private fun shareSunCodePng(profile: app.teron.superapp.core.UserProfile) {
+    private fun shareSunCodePng(profile: UserProfile) {
         try {
             val pngBytes = SunCodeCodec.renderShareCardPng(profile)
             val file = File(TeronFileProvider.sharedDir(activity), "Teron_SunCode_${profile.nodeId}.png")
@@ -243,26 +222,27 @@ class SunCodeDialog(
             val sendIntent = Intent(Intent.ACTION_SEND).apply {
                 type = "image/png"
                 putExtra(Intent.EXTRA_STREAM, uri)
-                putExtra(Intent.EXTRA_TEXT, "Мой контакт в автономном мессенджере Teron: ${SunCodeCodec.encodeUri(profile)}")
+                putExtra(Intent.EXTRA_TEXT, "Мой контакт в Teron: ${SunCodeCodec.encodeUri(profile)}")
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            activity.startActivity(Intent.createChooser(sendIntent, "Поделиться SunCode"))
+            activity.startActivity(Intent.createChooser(sendIntent, "Поделиться карточкой SunCode"))
         } catch (e: Exception) {
             Toast.makeText(activity, "Ошибка экспорта: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
 
     private fun buildScannerView(): View {
-        val scroll = ScrollView(activity)
+        val scroll = ScrollView(activity).apply { isVerticalScrollBarEnabled = false }
         val col = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(0, Theme.dp(activity, 2), 0, Theme.dp(activity, 20))
         }
 
         val hasCamPerm = activity.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
         val camBox = FrameLayout(activity).apply {
-            background = Theme.roundedBg(0xFF050811.toInt(), Theme.dp(activity, 22).toFloat(), Theme.accentCyan, Theme.dp(activity, 1.5f))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Theme.dp(activity, 270))
+            background = Theme.roundedBg(0xFF07090D.toInt(), Theme.dp(activity, 18).toFloat(), Theme.border, Theme.dp(activity, 1))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Theme.dp(activity, 250))
         }
 
         if (hasCamPerm) {
@@ -282,13 +262,12 @@ class SunCodeDialog(
             }
             camBox.addView(textureView)
 
-            // Animated radial targeting reticle overlay
             val overlay = object : View(activity) {
                 private var sweep = 0f
                 private val pRing = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                     style = Paint.Style.STROKE
-                    strokeWidth = Theme.dp(activity, 2f).toFloat()
-                    color = Theme.accentCyan
+                    strokeWidth = Theme.dp(activity, 1.5f).toFloat()
+                    color = Theme.brandText
                 }
                 override fun onDraw(canvas: Canvas) {
                     val cx = width / 2f
@@ -296,36 +275,25 @@ class SunCodeDialog(
                     val r = (width.coerceAtMost(height)) * 0.34f
                     pRing.alpha = 180
                     canvas.drawCircle(cx, cy, r, pRing)
-                    pRing.color = Theme.accentAmber
-                    canvas.drawArc(cx - r * 1.1f, cy - r * 1.1f, cx + r * 1.1f, cy + r * 1.1f, sweep, 55f, false, pRing)
-                    pRing.color = Theme.accentCyan
+                    canvas.drawArc(cx - r * 1.1f, cy - r * 1.1f, cx + r * 1.1f, cy + r * 1.1f, sweep, 60f, false, pRing)
                     if (isAttachedToWindow) {
-                        sweep = (sweep + 4f) % 360f
-                        postInvalidateDelayed(35L)
+                        sweep = (sweep + 3.5f) % 360f
+                        postInvalidateDelayed(36L)
                     }
                 }
             }
             camBox.addView(overlay)
 
-            // Pair nearby AirMesh peer when aligned in reticle
-            val pairBtn = TextView(activity).apply {
-                text = "⚡ Захватить узел в прицеле / рядом"
-                setTextColor(Color.WHITE)
-                textSize = 12.5f
-                paint.isFakeBoldText = true
-                background = Theme.roundedBg(0xCC111827.toInt(), Theme.dp(activity, 12).toFloat(), Theme.accentCyan, Theme.dp(activity, 1))
-                setPadding(Theme.dp(activity, 14), Theme.dp(activity, 8), Theme.dp(activity, 14), Theme.dp(activity, 8))
+            val pairBtn = Components.primaryButton(activity, "Подключить обнаруженный узел", R.drawable.ic_radar) {
+                val live = app.meshEngine.livePeers.values.firstOrNull()
+                if (live != null) {
+                    finishDecoded(SunCodeCodec.DecodedContact(live.nodeId, live.displayName, live.handle, live.publicKeyB64))
+                } else {
+                    Toast.makeText(activity, "Убедитесь, что у собеседника открыт Teron в одной сети, либо импортируйте PNG-карточку", Toast.LENGTH_LONG).show()
+                }
+            }.apply {
                 layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
                     bottomMargin = Theme.dp(activity, 12)
-                }
-                setOnClickListener {
-                    val live = app.meshEngine.livePeers.values.firstOrNull()
-                    if (live != null) {
-                        val c = SunCodeCodec.DecodedContact(live.nodeId, live.displayName, live.handle, live.publicKeyB64)
-                        finishDecoded(c)
-                    } else {
-                        Toast.makeText(activity, "Наведите на экран с SunCode (убедитесь, что у собеседника включён AirMesh) или загрузите PNG из галереи", Toast.LENGTH_LONG).show()
-                    }
                 }
             }
             camBox.addView(pairBtn)
@@ -334,54 +302,52 @@ class SunCodeDialog(
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
                 layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-                setPadding(Theme.dp(activity, 20), Theme.dp(activity, 20), Theme.dp(activity, 20), Theme.dp(activity, 20))
+                val p = Theme.dp(activity, 20)
+                setPadding(p, p, p, p)
             }
+            permCol.addView(Components.tonalIconBadge(activity, R.drawable.ic_camera, Theme.brandText, 48, 22, 14f))
             permCol.addView(TextView(activity).apply {
-                text = "📷 Разрешите доступ к камере для живого оптического видоискателя SunCode"
+                text = "Доступ к камере для оптического сканера SunCode"
                 setTextColor(Color.WHITE)
-                textSize = 14f
+                textSize = 13.5f
                 gravity = Gravity.CENTER
+                setPadding(0, Theme.dp(activity, 10), 0, Theme.dp(activity, 12))
             })
-            permCol.addView(TextView(activity).apply {
-                text = "Включить камеру"
-                setTextColor(Color.WHITE)
-                paint.isFakeBoldText = true
-                background = Theme.rippleButton(activity, Theme.accentIndigo, 12f)
-                setPadding(Theme.dp(activity, 18), Theme.dp(activity, 10), Theme.dp(activity, 18), Theme.dp(activity, 10))
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    topMargin = Theme.dp(activity, 12)
-                }
-                setOnClickListener {
-                    dismiss()
-                    onRequestCameraPermission()
-                }
+            permCol.addView(Components.primaryButton(activity, "Разрешить камеру", R.drawable.ic_camera) {
+                dismiss()
+                onRequestCameraPermission()
             })
             camBox.addView(permCol)
         }
         col.addView(camBox)
 
-        // Gallery PNG Import button
-        val galleryBtn = TextView(activity).apply {
-            text = "🖼 Сканировать карточку SunCode из галереи (PNG)"
-            setTextColor(Color.WHITE)
-            textSize = 14.5f
-            paint.isFakeBoldText = true
-            gravity = Gravity.CENTER
-            background = Theme.rippleButton(activity, Theme.accentEmerald, 14f)
-            setPadding(Theme.dp(activity, 16), Theme.dp(activity, 13), Theme.dp(activity, 16), Theme.dp(activity, 13))
+        // Import from PNG or Android Contacts Book
+        val importRow = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = Theme.dp(activity, 14)
-            }
-            setOnClickListener {
-                dismiss()
-                onRequestGalleryImport()
+                topMargin = Theme.dp(activity, 12)
             }
         }
-        col.addView(galleryBtn)
+        importRow.addView(Components.secondaryButton(activity, "Из PNG-файла", R.drawable.ic_image) {
+            dismiss()
+            onRequestGalleryImport()
+        }.apply {
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                rightMargin = Theme.dp(activity, 6)
+            }
+        })
+        importRow.addView(Components.secondaryButton(activity, "Телефонная книга", R.drawable.ic_contacts) {
+            dismiss()
+            onRequestPhoneContactPicker()
+        }.apply {
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                leftMargin = Theme.dp(activity, 6)
+            }
+        })
+        col.addView(importRow)
 
-        // Paste teron:// code manually or from clipboard
         val input = EditText(activity).apply {
-            hint = "Или вставьте ссылку teron://contact?id=TRN-..."
+            hint = "Вставьте ссылку teron://contact?id=TRN-..."
             setHintTextColor(Theme.textMuted)
             setTextColor(Theme.textPrimary)
             textSize = 13.5f
@@ -400,42 +366,29 @@ class SunCodeDialog(
                 topMargin = Theme.dp(activity, 10)
             }
         }
-        val clipBtn = TextView(activity).apply {
-            text = "Из буфера"
-            setTextColor(Theme.textPrimary)
-            gravity = Gravity.CENTER
-            background = Theme.rippleCard(activity, Theme.cardAlt, 12f)
-            setPadding(Theme.dp(activity, 12), Theme.dp(activity, 12), Theme.dp(activity, 12), Theme.dp(activity, 12))
+        rowBtns.addView(Components.secondaryButton(activity, "Из буфера", R.drawable.ic_copy) {
+            val cm = activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            val txt = cm.primaryClip?.getItemAt(0)?.coerceToText(activity)?.toString().orEmpty()
+            input.setText(txt)
+            val dec = SunCodeCodec.decodeUri(txt)
+            if (dec != null) finishDecoded(dec)
+        }.apply {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                rightMargin = Theme.dp(activity, 8)
+                rightMargin = Theme.dp(activity, 6)
             }
-            setOnClickListener {
-                val cm = activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                val txt = cm.primaryClip?.getItemAt(0)?.coerceToText(activity)?.toString().orEmpty()
-                input.setText(txt)
-                val dec = SunCodeCodec.decodeUri(txt)
-                if (dec != null) finishDecoded(dec)
+        })
+        rowBtns.addView(Components.primaryButton(activity, "Добавить", R.drawable.ic_check) {
+            val dec = SunCodeCodec.decodeUri(input.text.toString())
+            if (dec != null) {
+                finishDecoded(dec)
+            } else {
+                Toast.makeText(activity, "Некорректная ссылка контакта teron://contact", Toast.LENGTH_SHORT).show()
             }
-        }
-        val addBtn = TextView(activity).apply {
-            text = "Добавить контакт"
-            setTextColor(Color.WHITE)
-            paint.isFakeBoldText = true
-            gravity = Gravity.CENTER
-            background = Theme.rippleButton(activity, Theme.accentIndigo, 12f)
-            setPadding(Theme.dp(activity, 12), Theme.dp(activity, 12), Theme.dp(activity, 12), Theme.dp(activity, 12))
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.3f)
-            setOnClickListener {
-                val dec = SunCodeCodec.decodeUri(input.text.toString())
-                if (dec != null) {
-                    finishDecoded(dec)
-                } else {
-                    Toast.makeText(activity, "Неверный формат кода teron://contact", Toast.LENGTH_SHORT).show()
-                }
+        }.apply {
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                leftMargin = Theme.dp(activity, 6)
             }
-        }
-        rowBtns.addView(clipBtn)
-        rowBtns.addView(addBtn)
+        })
         col.addView(rowBtns)
 
         scroll.addView(col)
@@ -444,7 +397,7 @@ class SunCodeDialog(
 
     private fun finishDecoded(c: SunCodeCodec.DecodedContact) {
         app.db.upsertContact(c.nodeId, c.displayName, c.handle, c.publicKeyB64)
-        Toast.makeText(activity, "Контакт ${c.displayName} (${c.nodeId}) добавлен!", Toast.LENGTH_LONG).show()
+        Toast.makeText(activity, "Контакт ${c.displayName} сохранён", Toast.LENGTH_LONG).show()
         onContactAdded(c)
         dismiss()
     }
