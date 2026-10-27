@@ -67,44 +67,68 @@ class MainActivity : Activity(), TeronMeshEngine.Listener, TeronAudioEngine.List
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        app = application as TeronApp
-        Theme.isDark = app.db.getProfile().darkTheme
+        try {
+            app = application as TeronApp
+            val bootErr = app.startupError
+            if (bootErr != null) {
+                showFatalRecoveryView(bootErr)
+                return
+            }
+            Theme.isDark = app.db.getProfile().darkTheme
 
-        messengerScreen = MessengerScreen(
-            ctx = this,
-            app = app,
-            onRequestBlePermissions = { requestBlePermissions() },
-            onOpenSunCode = { scan -> openSunCodeModal(scan) }
-        )
-        mailScreen = MailScreen(this, app)
-        musicScreen = MusicScreen(
-            ctx = this,
-            app = app,
-            onRequestAudioPermissionAndScan = { requestAudioPermissionsAndScan() },
-            onOpenAudioFilePicker = { openAudioDocumentPicker() }
-        )
-        ecosystemScreen = EcosystemScreen(
-            ctx = this,
-            app = app,
-            onThemeChanged = { rebuildShell() },
-            onOpenSunCode = { scan -> openSunCodeModal(scan) },
-            onRequestAllPermissions = { requestAllPermissions() }
-        )
+            messengerScreen = MessengerScreen(
+                ctx = this,
+                app = app,
+                onRequestBlePermissions = { requestBlePermissions() },
+                onOpenSunCode = { scan -> openSunCodeModal(scan) }
+            )
+            mailScreen = MailScreen(this, app)
+            musicScreen = MusicScreen(
+                ctx = this,
+                app = app,
+                onRequestAudioPermissionAndScan = { requestAudioPermissionsAndScan() },
+                onOpenAudioFilePicker = { openAudioDocumentPicker() }
+            )
+            ecosystemScreen = EcosystemScreen(
+                ctx = this,
+                app = app,
+                onThemeChanged = { rebuildShell() },
+                onOpenSunCode = { scan -> openSunCodeModal(scan) },
+                onRequestAllPermissions = { requestAllPermissions() }
+            )
 
-        buildShell()
-        handleIncomingDeepLink(intent)
+            buildShell()
+            handleIncomingDeepLink(intent)
 
-        // Offer friendly one-time callsign setup on very first launch
-        if (!app.db.isOnboarded()) {
-            app.db.markOnboarded()
-            uiTickHandler.postDelayed({
-                if (!isFinishing) {
-                    SettingsScreen.showEditProfileDialog(this, app) {
-                        rebuildShell()
+            // Offer friendly one-time callsign setup on very first launch
+            if (!app.db.isOnboarded()) {
+                app.db.markOnboarded()
+                uiTickHandler.postDelayed({
+                    if (!isFinishing && !isDestroyed) {
+                        try {
+                            SettingsScreen.showEditProfileDialog(this, app) {
+                                rebuildShell()
+                            }
+                        } catch (_: Throwable) {}
                     }
-                }
-            }, 350L)
+                }, 400L)
+            }
+        } catch (t: Throwable) {
+            showFatalRecoveryView(t.stackTraceToString())
         }
+    }
+
+    private fun showFatalRecoveryView(trace: String) {
+        val scroll = android.widget.ScrollView(this).apply { setBackgroundColor(0xFF090D16.toInt()) }
+        val tv = TextView(this).apply {
+            text = "Диагностика запуска Teron:\n\n$trace"
+            setTextColor(Color.WHITE)
+            textSize = 12f
+            val p = (16 * resources.displayMetrics.density).toInt()
+            setPadding(p, p * 2, p, p)
+        }
+        scroll.addView(tv)
+        setContentView(scroll)
     }
 
     override fun onNewIntent(intent: Intent?) {
@@ -138,7 +162,13 @@ class MainActivity : Activity(), TeronMeshEngine.Listener, TeronAudioEngine.List
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         }
 
-        if (Build.VERSION.SDK_INT >= 28) {
+        if (Build.VERSION.SDK_INT >= 30) {
+            rootFrame.setOnApplyWindowInsetsListener { v, insets ->
+                val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.ime())
+                v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+                insets
+            }
+        } else if (Build.VERSION.SDK_INT >= 28) {
             rootFrame.setOnApplyWindowInsetsListener { v, insets ->
                 @Suppress("DEPRECATION")
                 val topInset = insets.systemWindowInsetTop
@@ -471,20 +501,26 @@ class MainActivity : Activity(), TeronMeshEngine.Listener, TeronAudioEngine.List
 
     override fun onResume() {
         super.onResume()
-        app.meshEngine.addListener(this)
-        app.audioEngine.addListener(this)
-        uiTickHandler.post(playbackTickRunnable)
+        if (::app.isInitialized && app.startupError == null) {
+            app.meshEngine.addListener(this)
+            app.audioEngine.addListener(this)
+            uiTickHandler.post(playbackTickRunnable)
+        }
     }
 
     override fun onPause() {
         uiTickHandler.removeCallbacks(playbackTickRunnable)
-        app.meshEngine.removeListener(this)
-        app.audioEngine.removeListener(this)
+        if (::app.isInitialized && app.startupError == null) {
+            app.meshEngine.removeListener(this)
+            app.audioEngine.removeListener(this)
+        }
         super.onPause()
     }
 
     override fun onDestroy() {
-        ecosystemScreen.shutdown()
+        if (::ecosystemScreen.isInitialized) {
+            ecosystemScreen.shutdown()
+        }
         super.onDestroy()
     }
 

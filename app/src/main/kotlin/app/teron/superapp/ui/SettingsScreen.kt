@@ -236,10 +236,10 @@ object SettingsScreen {
         group.addView(settingRow(
             "ℹ️", Theme.accentCyan,
             "О суперприложении Teron",
-            "Версия 1.0.0 (Build 1) • 100% Native Kotlin APK"
+            "Версия 1.0.1 (Build 2) • 100% Native Kotlin APK"
         ) {
             AlertDialog.Builder(ctx)
-                .setTitle("Teron SuperApp v1.0.0")
+                .setTitle("Teron SuperApp v1.0.1")
                 .setMessage(
                     "Нативное Android-приложение (Kotlin + Android SDK, без WebView).\n\n" +
                         "Включает:\n" +

@@ -38,6 +38,7 @@ class EcosystemScreen(
     private var hanziQuizMode: Boolean = false
     private var tts: TextToSpeech? = null
     private var ttsReady = false
+    private var ttsInitialized = false
 
     // --- Mahjong Blast state ---
     data class MahjongTile(
@@ -49,18 +50,29 @@ class EcosystemScreen(
         val color: Int,
         var matched: Boolean = false
     )
+    private data class TileSpec(val code: String, val sym: String, val nameRu: String, val lore: String, val color: Int)
+
+    private val tileCatalog = listOf(
+        TileSpec("D_RED", "中", "Красный Дракон (Хунчжун)", "Символ точного попадания в цель, успеха на экзаменах и жизненной энергии в культуре Китая.", Theme.accentCoral),
+        TileSpec("D_GRN", "發", "Зелёный Дракон (Фацай)", "Означает процветание, рост и пожелание достатка («Гунси Фацай»).", Theme.accentEmerald),
+        TileSpec("D_WHT", "白", "Белый Дракон (Байбань)", "Олицетворяет чистоту помыслов, искренность и уважение к родителям.", Theme.accentBlue),
+        TileSpec("W_EAST", "東", "Восточный Ветер (Дун)", "Главный ветер Маджонга: символ весны, рассвета над Тихим океаном и начала пути.", Theme.accentAmber),
+        TileSpec("W_SOUTH", "南", "Южный Ветер (Нань)", "Символ тёплого лета, полуденного солнца и творческого огня.", Theme.accentCoral),
+        TileSpec("W_WEST", "西", "Западный Ветер (Си)", "Символ золотой осени, сбора урожая и мудрого спокойствия.", Theme.accentPurple),
+        TileSpec("B_1", "🎋", "1 Бамбук (Павлин)", "Первая кость масти Бамбука традиционно изображает птицу счастья — воробья или павлина.", Theme.accentEmerald),
+        TileSpec("C_8", "八萬", "8 Тьмы (Восемь тысяч)", "Число 8 (ба) в Китае созвучно богатству и бесконечной гармонии.", Theme.accentAmber),
+        TileSpec("P_9", "九筒", "9 Жемчужин (Небесный круг)", "Девятка в китайской традиции — императорское число полноты неба и земли.", Theme.accentCyan)
+    )
+
     private val mahjongBoard = mutableListOf<MahjongTile>()
     private var selectedTileSlot: Int? = null
     private var mahjongScore: Int = 0
     private var mahjongCombo: Int = 0
     private var lastCulturalNote: String = "Выберите две одинаковые открытые кости Маджонга (свободные слева или справа в ряду), чтобы открыть культурную историю символа!"
 
-    init {
-        initTts()
-        resetMahjongBoard()
-    }
-
-    private fun initTts() {
+    private fun ensureTtsInitialized() {
+        if (ttsInitialized) return
+        ttsInitialized = true
         try {
             tts = TextToSpeech(ctx.applicationContext) { status ->
                 if (status == TextToSpeech.SUCCESS) {
@@ -68,11 +80,11 @@ class EcosystemScreen(
                     ttsReady = res != TextToSpeech.LANG_MISSING_DATA && res != TextToSpeech.LANG_NOT_SUPPORTED
                 }
             }
-        } catch (_: Exception) {}
+        } catch (_: Throwable) {}
     }
 
     fun shutdown() {
-        try { tts?.shutdown() } catch (_: Exception) {}
+        try { tts?.shutdown() } catch (_: Throwable) {}
     }
 
     fun openSubArg(arg: String?) {
@@ -256,6 +268,7 @@ class EcosystemScreen(
     )
 
     private fun buildHanziDojoView(): View {
+        ensureTtsInitialized()
         val masteryMap = app.db.getHanziMasteryMap()
         val card = hanziDeck[hanziIdx.coerceIn(0, hanziDeck.lastIndex)]
         val stars = masteryMap[card.id] ?: 0
@@ -501,20 +514,6 @@ class EcosystemScreen(
     // =========================================================================
     // MODULE 2: MAHJONG BLAST / CULTURAL SOLITAIRE (36 TILES, 6x6 LAYERED ROWS)
     // =========================================================================
-    private data class TileSpec(val code: String, val sym: String, val nameRu: String, val lore: String, val color: Int)
-
-    private val tileCatalog = listOf(
-        TileSpec("D_RED", "中", "Красный Дракон (Хунчжун)", "Символ точного попадания в цель, успеха на экзаменах и жизненной энергии в культуре Китая.", Theme.accentCoral),
-        TileSpec("D_GRN", "發", "Зелёный Дракон (Фацай)", "Означает процветание, рост и пожелание достатка («Гунси Фацай»).", Theme.accentEmerald),
-        TileSpec("D_WHT", "白", "Белый Дракон (Байбань)", "Олицетворяет чистоту помыслов, искренность и уважение к родителям.", Theme.accentBlue),
-        TileSpec("W_EAST", "東", "Восточный Ветер (Дун)", "Главный ветер Маджонга: символ весны, рассвета над Тихим океаном и начала пути.", Theme.accentAmber),
-        TileSpec("W_SOUTH", "南", "Южный Ветер (Нань)", "Символ тёплого лета, полуденного солнца и творческого огня.", Theme.accentCoral),
-        TileSpec("W_WEST", "西", "Западный Ветер (Си)", "Символ золотой осени, сбора урожая и мудрого спокойствия.", Theme.accentPurple),
-        TileSpec("B_1", "🎋", "1 Бамбук (Павлин)", "Первая кость масти Бамбука традиционно изображает птицу счастья — воробья или павлина.", Theme.accentEmerald),
-        TileSpec("C_8", "八萬", "8 Тьмы (Восемь тысяч)", "Число 8 (ба) в Китае созвучно богатству и бесконечной гармонии.", Theme.accentAmber),
-        TileSpec("P_9", "九筒", "9 Жемчужин (Небесный круг)", "Девятка в китайской традиции — императорское число полноты неба и земли.", Theme.accentCyan)
-    )
-
     private fun resetMahjongBoard() {
         mahjongBoard.clear()
         selectedTileSlot = null
@@ -541,6 +540,7 @@ class EcosystemScreen(
     }
 
     private fun buildMahjongView(): View {
+        if (mahjongBoard.isEmpty()) resetMahjongBoard()
         val scroll = ScrollView(ctx)
         val col = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL

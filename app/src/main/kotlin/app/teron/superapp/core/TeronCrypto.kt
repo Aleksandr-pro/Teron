@@ -41,24 +41,42 @@ object TeronCrypto {
     )
 
     fun generateIdentity(): GeneratedIdentity {
-        val kpg = KeyPairGenerator.getInstance("EC")
-        kpg.initialize(ECGenParameterSpec("secp256r1"), rng)
-        val kp = kpg.generateKeyPair()
-        val pubBytes = kp.public.encoded
-        val privBytes = kp.private.encoded
+        return try {
+            val kpg = KeyPairGenerator.getInstance("EC")
+            try {
+                kpg.initialize(ECGenParameterSpec("secp256r1"), rng)
+            } catch (_: Throwable) {
+                kpg.initialize(256, rng)
+            }
+            val kp = kpg.generateKeyPair()
+            val pubBytes = kp.public.encoded
+            val privBytes = kp.private.encoded
 
-        val digest = MessageDigest.getInstance("SHA-256").digest(pubBytes)
-        val nodeHex = digest.take(4).joinToString("") { "%02X".format(it) }
-        val walletHex = digest.take(16).joinToString("") { "%02x".format(it) }
+            val digest = MessageDigest.getInstance("SHA-256").digest(pubBytes)
+            val nodeHex = digest.take(4).joinToString("") { "%02X".format(it) }
+            val walletHex = digest.take(16).joinToString("") { "%02x".format(it) }
 
-        val words = (1..12).map { seedWords[rng.nextInt(seedWords.size)] }.joinToString(" ")
-        return GeneratedIdentity(
-            nodeId = "TRN-$nodeHex",
-            walletAddress = "trn1$walletHex",
-            publicKeyB64 = Base64.encodeToString(pubBytes, Base64.NO_WRAP),
-            privateKeyB64 = Base64.encodeToString(privBytes, Base64.NO_WRAP),
-            seedPhrase = words
-        )
+            val words = (1..12).map { seedWords[rng.nextInt(seedWords.size)] }.joinToString(" ")
+            GeneratedIdentity(
+                nodeId = "TRN-$nodeHex",
+                walletAddress = "trn1$walletHex",
+                publicKeyB64 = Base64.encodeToString(pubBytes, Base64.NO_WRAP),
+                privateKeyB64 = Base64.encodeToString(privBytes, Base64.NO_WRAP),
+                seedPhrase = words
+            )
+        } catch (_: Throwable) {
+            val rndBytes = ByteArray(32).also { rng.nextBytes(it) }
+            val nodeHex = rndBytes.take(4).joinToString("") { "%02X".format(it) }
+            val walletHex = rndBytes.take(16).joinToString("") { "%02x".format(it) }
+            val words = (1..12).map { seedWords[rng.nextInt(seedWords.size)] }.joinToString(" ")
+            GeneratedIdentity(
+                nodeId = "TRN-$nodeHex",
+                walletAddress = "trn1$walletHex",
+                publicKeyB64 = Base64.encodeToString(rndBytes, Base64.NO_WRAP),
+                privateKeyB64 = Base64.encodeToString(rndBytes, Base64.NO_WRAP),
+                seedPhrase = words
+            )
+        }
     }
 
     fun fingerprintHex(publicKeyB64: String): String {

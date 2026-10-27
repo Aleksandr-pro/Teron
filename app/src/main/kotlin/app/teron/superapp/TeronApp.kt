@@ -14,13 +14,21 @@ class TeronApp : Application() {
         private set
     lateinit var audioEngine: TeronAudioEngine
         private set
+    var startupError: String? = null
+        private set
 
     override fun onCreate() {
         super.onCreate()
-        db = TeronDatabase(this)
-        Theme.isDark = db.getProfile().darkTheme
-        meshEngine = TeronMeshEngine(this, db)
-        audioEngine = TeronAudioEngine(this, db)
-        meshEngine.start()
+        try {
+            db = TeronDatabase(this)
+            Theme.isDark = db.getProfile().darkTheme
+            meshEngine = TeronMeshEngine(this, db)
+            audioEngine = TeronAudioEngine(this, db)
+            try {
+                meshEngine.start()
+            } catch (_: Throwable) {}
+        } catch (t: Throwable) {
+            startupError = t.stackTraceToString()
+        }
     }
 }

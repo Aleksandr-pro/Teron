@@ -89,7 +89,7 @@ java -jar "$TC/lib/apksigner.jar" sign \
   --ks-pass pass:teron_superapp_2026 \
   --key-pass pass:teron_superapp_2026 \
   --ks-key-alias teron_release \
-  --min-sdk-version 24 \
+  --min-sdk-version 21 \
   --v1-signing-enabled true \
   --v2-signing-enabled true \
   --v3-signing-enabled true \

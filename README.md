@@ -2,14 +2,14 @@
 
 **Teron** — полноценное нативное Android-приложение (**100% Kotlin + Android SDK, без WebView и веб-обёрток**), объединяющее автономный мессенджер без интернета (**AirMesh**), электронную почту (**Teron Mail**), офлайн-музыку и синтезатор (**Teron Sound**), лучевые визуальные коды (**SunCode**), тренажёр китайского языка по ассоциациям (**Ханьцзы Додзё**), культурную игру **Маджонг** и криптокошелёк **TeronPay**.
 
-## 📲 Скачать APK (v1.0.0)
+## 📲 Скачать APK (v1.0.1)
 
-👉 **[Скачать напрямую Teron-v1.0.0.apk](https://github.com/Aleksandr-pro/Teron/raw/arena/6d75d0a4-teron/releases/Teron-v1.0.0.apk)**
+👉 **[Скачать напрямую Teron-v1.0.1.apk](https://raw.githubusercontent.com/Aleksandr-pro/Teron/arena/6d75d0a4-teron/releases/Teron-v1.0.1.apk)**
 
 - **Пакет:** `app.teron.superapp`
-- **Версия:** `1.0.0` (`versionCode = 1`)
+- **Версия:** `1.0.1` (`versionCode = 2`)
 - **Совместимость:** Android 7.0 – Android 16 (`minSdk 24`, `targetSdk 34`)
-- **Подпись:** APK Signature Scheme v2 + v3 (единый релизный ключ для бесшовного обновления поверх предыдущих версий без потери чатов и ключей)
+- **Подпись:** APK Signature Scheme v1 + v2 + v3 (единый релизный ключ для бесшовного обновления поверх предыдущих версий без потери чатов и ключей)
 
 ---
 
