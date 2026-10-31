@@ -103,7 +103,7 @@ object Components {
             isClickable = true
             isFocusable = true
             setOnClickListener { onClick() }
-            setPadding(Theme.dp(ctx, 12), Theme.dp(ctx, 7), Theme.dp(ctx, 12), Theme.dp(ctx, 7))
+            setPadding(Theme.dp(ctx, 10), Theme.dp(ctx, 5), Theme.dp(ctx, 10), Theme.dp(ctx, 5))
             background = Theme.ripple(
                 ctx,
                 if (selected) Theme.brand else Theme.cardAlt,
@@ -145,8 +145,8 @@ object Components {
     }
 
     fun sectionTitle(ctx: Context, label: String): TextView =
-        text(ctx, label, 12f, Theme.textMuted, bold = true).apply {
-            setPadding(0, Theme.dp(ctx, 14), 0, Theme.dp(ctx, 8))
+        text(ctx, label, 11f, Theme.textMuted, bold = true).apply {
+            setPadding(0, Theme.dp(ctx, 10), 0, Theme.dp(ctx, 6))
         }
 
     fun emptyState(ctx: Context, title: String, subtitle: String): LinearLayout =

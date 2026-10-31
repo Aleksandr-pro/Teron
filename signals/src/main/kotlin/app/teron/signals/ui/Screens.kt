@@ -44,6 +44,7 @@ class SignalsScreen(
     private var loading = false
     private var filterKind: PairKind? = null
     private var lastSignals: List<PairSignal> = emptyList()
+    private var watchedNow: List<PairInfo> = emptyList()
 
     // Автообновление раз в минуту, пока экран открыт.
     private val autoHandler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -56,13 +57,13 @@ class SignalsScreen(
 
     fun build(): View {
         val root = Components.vertical(ctx)
-        root.setPadding(dp(16), dp(12), dp(16), dp(8))
+        root.setPadding(dp(12), dp(10), dp(12), dp(6))
 
         val titleRow = Components.horizontal(ctx)
         titleRow.gravity = Gravity.CENTER_VERTICAL
         titleRow.addView(Components.icon(ctx, R.drawable.ic_signal, Theme.brandText, 22))
         titleRow.addView(
-            Components.text(ctx, "Терон Сигналы", 18f, Theme.textPrimary, bold = true).apply {
+            Components.text(ctx, "Терон Сигналы", 16f, Theme.textPrimary, bold = true).apply {
                 setPadding(dp(10), 0, 0, 0)
             }
         )
@@ -177,6 +178,7 @@ class SignalsScreen(
         setStatus("Загрузка сигналов…", Theme.textMuted)
         val tf = Timeframe.fromId(prefs.timeframe)
         val pairs = watchedPairs()
+        watchedNow = pairs
         if (pairs.isEmpty()) {
             loading = false
             setStatus("Нет пар в списке отслеживания", Theme.amberText)
@@ -271,14 +273,61 @@ class SignalsScreen(
                     if (kind == PairKind.FOREX) "Валютные пары · смотрим парами (без OTC)" else "Криптовалюты · каждая монета отдельно"
                 )
             )
-            group.forEachIndexed { i, ps ->
+            // Внутри секции — закреплённый порядок: BTC, ETH, SOL, LTC, BCH,
+            // затем остальные по силе сигнала; валютные пары — в своём порядке.
+            val ordered = group.sortedWith(
+                compareBy<PairSignal> { pinnedIndex(it.pair) }
+                    .thenByDescending { it.confidence }
+            )
+            ordered.forEachIndexed { i, ps ->
                 if (i > 0) {
                     listContainer.addView(
-                        Components.divider(ctx).apply { setPadding(0, dp(8), 0, dp(8)) }
+                        Components.divider(ctx).apply { setPadding(0, dp(6), 0, dp(6)) }
                     )
                 }
                 listContainer.addView(signalCard(ps))
             }
+        }
+        renderMissing(signals)
+    }
+
+    /** Место инструмента в закреплённом порядке своей секции. */
+    private fun pinnedIndex(p: PairInfo): Int {
+        val list = if (p.kind == PairKind.FOREX)
+            TradingViewApi.FOREX_PAIRS.map { it.ticker }
+        else
+            TradingViewApi.CORE_CRYPTO_TICKERS
+        val idx = list.indexOf(p.ticker)
+        return if (idx >= 0) idx else list.size
+    }
+
+    /**
+     * Инструменты из списка, по которым сканнер не вернул данных, всё равно
+     * показываем компактной строкой «нет данных» — чтобы, например, Биткоин
+     * никогда не «пропадал» из списка молча.
+     */
+    private fun renderMissing(signals: List<PairSignal>) {
+        val got = signals.map { it.pair.ticker }.toHashSet()
+        val missing = watchedNow.filter {
+            it.ticker !in got && (filterKind == null || it.kind == filterKind)
+        }
+        if (missing.isEmpty()) return
+        listContainer.addView(Components.sectionTitle(ctx, "Нет данных по:"))
+        for (p in missing.sortedWith(compareBy { pinnedIndex(it) })) {
+            val row = Components.card(ctx, LinearLayout.HORIZONTAL, 9)
+            row.gravity = Gravity.CENTER_VERTICAL
+            row.addView(Components.coinBadge(ctx, p.base, 26))
+            row.addView(
+                Components.text(ctx, p.display, 13f, Theme.textPrimary, bold = true).apply {
+                    setPadding(dp(8), 0, 0, 0)
+                }
+            )
+            row.addView(
+                Components.text(
+                    ctx, "нет данных · потяните обновить ↻", 11f, Theme.textMuted, weight = 1f
+                ).apply { setPadding(dp(8), 0, 0, 0) }
+            )
+            listContainer.addView(row)
         }
     }
 
@@ -307,20 +356,20 @@ class SignalsScreen(
     }
 
     private fun signalCard(ps: PairSignal): View {
-        val card = Components.card(ctx)
+        val card = Components.card(ctx, LinearLayout.VERTICAL, 10)
         card.isClickable = true
         card.isFocusable = true
         card.setOnClickListener { onOpenDetail(ps) }
 
         val r1 = Components.horizontal(ctx)
         r1.gravity = Gravity.CENTER_VERTICAL
-        r1.addView(Components.coinBadge(ctx, ps.pair.base, 34))
+        r1.addView(Components.coinBadge(ctx, ps.pair.base, 28))
         r1.addView(
-            Components.text(ctx, ps.pair.display, 15f, Theme.textPrimary, bold = true).apply {
+            Components.text(ctx, ps.pair.display, 14f, Theme.textPrimary, bold = true).apply {
                 setPadding(dp(10), 0, 0, 0)
             }
         )
-        r1.addView(Components.text(ctx, ps.pair.name, 12f, Theme.textSecondary, weight = 1f))
+        r1.addView(Components.text(ctx, ps.pair.name, 11f, Theme.textSecondary, weight = 1f))
         r1.addView(
             Components.badge(
                 ctx, ps.finalSignal.label,
@@ -333,13 +382,13 @@ class SignalsScreen(
         r2.gravity = Gravity.CENTER_VERTICAL
         r2.addView(
             Components.text(
-                ctx, Theme.price(ps.pair.price), 17f, Theme.textPrimary, mono = true, bold = true, weight = 1f
+                ctx, Theme.price(ps.pair.price), 15f, Theme.textPrimary, mono = true, bold = true, weight = 1f
             )
         )
         val chg = ps.pair.change24h
         r2.addView(
             Components.text(
-                ctx, Theme.pct(chg), 13f,
+                ctx, Theme.pct(chg), 12f,
                 if (chg >= 0) Theme.greenText else Theme.redText, mono = true, bold = true, gravity = Gravity.END
             )
         )
@@ -355,24 +404,24 @@ class SignalsScreen(
         r3.addView(
             Components.text(
                 ctx, "RSI ${Theme.num(ps.readings.firstOrNull { it.key == "RSI" }?.value ?: Double.NaN)}",
-                12f, Theme.textSecondary, mono = true
+                11f, Theme.textSecondary, mono = true
             ).apply { setPadding(dp(8), 0, 0, 0) }
         )
         val macd = ps.readings.firstOrNull { it.key == "MACD" }
         r3.addView(
-            Components.text(ctx, "MACD ${arrow(macd?.state)}", 12f, Theme.textSecondary).apply {
+            Components.text(ctx, "MACD ${arrow(macd?.state)}", 11f, Theme.textSecondary).apply {
                 setPadding(dp(10), 0, 0, 0)
             }
         )
         val tr = ps.readings.firstOrNull { it.key == "TrendMA" }
         r3.addView(
-            Components.text(ctx, "SMA ${arrow(tr?.state)}", 12f, Theme.textSecondary).apply {
+            Components.text(ctx, "SMA ${arrow(tr?.state)}", 11f, Theme.textSecondary).apply {
                 setPadding(dp(10), 0, 0, 0)
             }
         )
         r3.addView(
             Components.text(
-                ctx, "${ps.bullish}▲ ${ps.bearish}▼", 12f, Theme.textSecondary, gravity = Gravity.END
+                ctx, "${ps.bullish}▲ ${ps.bearish}▼", 11f, Theme.textSecondary, gravity = Gravity.END
             ).apply { setPadding(dp(10), 0, 0, 0) }
         )
         card.addView(r3)
@@ -434,13 +483,13 @@ class PairsScreen(
 
     fun build(): View {
         val root = Components.vertical(ctx)
-        root.setPadding(dp(16), dp(12), dp(16), dp(8))
+        root.setPadding(dp(12), dp(10), dp(12), dp(6))
 
         val titleRow = Components.horizontal(ctx)
         titleRow.gravity = Gravity.CENTER_VERTICAL
         titleRow.addView(Components.icon(ctx, R.drawable.ic_star, Theme.brandText, 22))
         titleRow.addView(
-            Components.text(ctx, "Пары", 18f, Theme.textPrimary, bold = true).apply {
+            Components.text(ctx, "Пары", 16f, Theme.textPrimary, bold = true).apply {
                 setPadding(dp(10), 0, 0, 0)
             }
         )
@@ -549,7 +598,7 @@ class PairsScreen(
     }
 
     private fun pairRow(p: PairInfo, watched: Boolean): View {
-        val card = Components.card(ctx, LinearLayout.HORIZONTAL, 12)
+        val card = Components.card(ctx, LinearLayout.HORIZONTAL, 9)
         card.gravity = Gravity.CENTER_VERTICAL
         card.isClickable = true
         card.isFocusable = true
@@ -566,7 +615,7 @@ class PairsScreen(
                 if (watched) Theme.amberText else Theme.textMuted, 20
             )
         )
-        card.addView(Components.coinBadge(ctx, p.base, 32))
+        card.addView(Components.coinBadge(ctx, p.base, 28))
         card.addView(
             Components.text(ctx, p.display, 14f, Theme.textPrimary, bold = true).apply {
                 setPadding(dp(10), 0, 0, 0)
@@ -610,7 +659,7 @@ class DetailScreen(
 ) {
     fun build(): View {
         val root = Components.vertical(ctx)
-        root.setPadding(dp(16), dp(12), dp(16), dp(28))
+        root.setPadding(dp(12), dp(10), dp(12), dp(20))
         root.setBackgroundColor(Theme.bg)
 
         val top = Components.horizontal(ctx)
