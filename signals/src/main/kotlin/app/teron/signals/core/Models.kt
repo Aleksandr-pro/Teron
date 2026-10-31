@@ -68,8 +68,17 @@ data class PairInfo(
     val rank: Int,
     val kind: PairKind = PairKind.CRYPTO
 ) {
-    /** Человекочитаемая пара: BTC/USDT, EUR/USD. */
-    val display: String get() = if (quote.isEmpty()) base else "$base/$quote"
+    /**
+     * Как инструмент называется на экране:
+     * - криптовалюта — сама монета отдельно: `BTC`, `ETH`, `SOL`…
+     *   (сигнал считается по монете к доллару, но монета — отдельный актив);
+     * - валютная пара — именно пара: `EUR/USD`, `GBP/USD`…
+     */
+    val display: String
+        get() = when (kind) {
+            PairKind.FOREX -> if (quote.isEmpty()) base else "$base/$quote"
+            PairKind.CRYPTO -> base
+        }
 }
 
 data class PairSignal(

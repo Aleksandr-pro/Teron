@@ -216,18 +216,30 @@ class SignalsScreen(
         status.setTextColor(color)
     }
 
-    /** Сводка рынка одной строкой: куда смотрит большинство сигналов. */
+    /**
+     * Сводка — отдельно по каждому рынку, рынки не смешиваем:
+     * криптовалюты считаются по монетам, валютные — по парам.
+     */
     private fun renderSummary(signals: List<PairSignal>) {
         if (signals.isEmpty()) {
             summary.text = ""
             return
         }
-        val buy = signals.count { it.finalSignal == Signal.BUY || it.finalSignal == Signal.STRONG_BUY }
-        val sell = signals.count { it.finalSignal == Signal.SELL || it.finalSignal == Signal.STRONG_SELL }
-        val hold = signals.size - buy - sell
-        val strongest = signals.maxByOrNull { it.confidence }
-        summary.text = "Рынок сейчас: ▲ $buy покупать · ▼ $sell продавать · ■ $hold держать" +
-            (strongest?.let { " · Самый сильный: ${it.pair.display} (${it.confidence}%)" } ?: "")
+        val parts = ArrayList<String>()
+        for (kind in PairKind.values()) {
+            val group = signals.filter { it.pair.kind == kind }
+            if (group.isEmpty()) continue
+            val buy = group.count { it.finalSignal == Signal.BUY || it.finalSignal == Signal.STRONG_BUY }
+            val sell = group.count { it.finalSignal == Signal.SELL || it.finalSignal == Signal.STRONG_SELL }
+            val hold = group.size - buy - sell
+            val strongest = group.maxByOrNull { it.confidence }
+            val title = if (kind == PairKind.FOREX) "Валютные пары" else "Криптовалюты"
+            parts.add(
+                "$title: ▲ $buy · ▼ $sell · ■ $hold" +
+                    (strongest?.let { " · сильнейший: ${it.pair.display} (${it.confidence}%)" } ?: "")
+            )
+        }
+        summary.text = parts.joinToString("\n")
     }
 
     private fun render(signals: List<PairSignal>) {
@@ -242,7 +254,11 @@ class SignalsScreen(
             return
         }
         var first = true
-        for ((kind, group) in visible.groupBy { it.pair.kind }) {
+        // Порядок секций всегда: сначала криптовалюты (каждая монета отдельно),
+        // затем валютные пары. Рынки друг с другом не перемешиваются.
+        val grouped = visible.groupBy { it.pair.kind }
+        for (kind in PairKind.values()) {
+            val group = grouped[kind] ?: continue
             if (!first) {
                 listContainer.addView(
                     Components.divider(ctx).apply { setPadding(0, dp(10), 0, dp(2)) }
@@ -252,7 +268,7 @@ class SignalsScreen(
             listContainer.addView(
                 Components.sectionTitle(
                     ctx,
-                    if (kind == PairKind.FOREX) "Валютные пары · Forex (без OTC)" else "Криптовалюты"
+                    if (kind == PairKind.FOREX) "Валютные пары · смотрим парами (без OTC)" else "Криптовалюты · каждая монета отдельно"
                 )
             )
             group.forEachIndexed { i, ps ->
@@ -552,13 +568,18 @@ class PairsScreen(
         )
         card.addView(Components.coinBadge(ctx, p.base, 32))
         card.addView(
-            Components.text(ctx, p.base, 14f, Theme.textPrimary, bold = true).apply {
+            Components.text(ctx, p.display, 14f, Theme.textPrimary, bold = true).apply {
                 setPadding(dp(10), 0, 0, 0)
             }
         )
         card.addView(Components.text(ctx, p.name, 12f, Theme.textSecondary, weight = 0.5f))
+        // У валютной пары котировка уже в названии (EUR/USD), у криптовалюты
+        // показываем, что цена — в долларах.
         card.addView(
-            Components.text(ctx, p.quote, 11f, Theme.textMuted, gravity = Gravity.END).apply {
+            Components.text(
+                ctx, if (p.kind == PairKind.FOREX) "FX" else "$",
+                11f, Theme.textMuted, gravity = Gravity.END
+            ).apply {
                 setPadding(dp(6), 0, 0, 0)
             }
         )
@@ -598,14 +619,21 @@ class DetailScreen(
             Components.iconButton(ctx, R.drawable.ic_back, Theme.textPrimary, 20) { onBack() }
         )
         top.addView(
-            Components.text(ctx, "${ps.pair.base} / ${ps.pair.quote}", 17f, Theme.textPrimary, bold = true).apply {
+            Components.text(ctx, ps.pair.display, 17f, Theme.textPrimary, bold = true).apply {
                 setPadding(dp(6), 0, 0, 0)
             }
         )
         root.addView(top)
 
         root.addView(
-            Components.text(ctx, ps.pair.name, 13f, Theme.textSecondary).apply {
+            Components.text(
+                ctx,
+                if (ps.pair.kind == PairKind.FOREX)
+                    "Валютная пара · ${ps.pair.name}"
+                else
+                    "Криптовалюта · цена в долларах (USDT)",
+                13f, Theme.textSecondary
+            ).apply {
                 setPadding(0, dp(2), 0, dp(12))
             }
         )
