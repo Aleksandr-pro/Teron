@@ -2,16 +2,16 @@ package app.teron.signals.core
 
 /** Supported TradingView scanner timeframes (minute bars + D/W/M). */
 enum class Timeframe(val id: String, val label: String, val tv: String) {
-    M1("1m", "1M", "1"),
-    M5("5m", "5M", "5"),
-    M15("15m", "15M", "15"),
-    M30("30m", "30M", "30"),
-    H1("1h", "1H", "60"),
-    H2("2h", "2H", "120"),
-    H4("4h", "4H", "240"),
-    D1("1d", "1D", "1D"),
-    W1("1w", "1W", "1W"),
-    MN1("1M", "1M", "1M");
+    M1("1m", "1мин", "1"),
+    M5("5m", "5мин", "5"),
+    M15("15m", "15мин", "15"),
+    M30("30m", "30мин", "30"),
+    H1("1h", "1ч", "60"),
+    H2("2h", "2ч", "120"),
+    H4("4h", "4ч", "240"),
+    D1("1d", "1Д", "1D"),
+    W1("1w", "1Н", "1W"),
+    MN1("1M", "1Мес", "1M");
 
     companion object {
         val DEFAULT: Timeframe = D1
@@ -73,6 +73,10 @@ data class PairSignal(
     val tvSignal: Signal,
     val localScore: Double,
     val localSignal: Signal,
+    /** Итоговый взвешенный балл −1..+1 (0.6·TradingView + 0.4·локальный анализ). */
+    val finalScore: Double,
+    /** Сила сигнала 0..100: насколько единодушны индикаторы и рейтинг TV. */
+    val confidence: Int,
     val finalSignal: Signal,
     val readings: List<IndicatorReading>,
     val bullish: Int,

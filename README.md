@@ -2,6 +2,15 @@
 
 **Teron** — нативное Android-приложение (**100% Kotlin + Android SDK, без WebView и веб-обёрток**), объединяющее автономный мессенджер без интернета (**AirMesh**), почтовый клиент (**IMAP/SMTP + AirMesh**), некастодиальный мультисетевой криптокошелёк (**TeronPay BIP-39**), локальный аудиоплеер, оптический обмен ключами (**SunCode & QR**) и прикладные мини-сервисы.
 
+## 📈 Teron Signals — торговые сигналы (отдельное приложение)
+
+Нативный помощник трейдера: сигналы **BUY / SELL / HOLD** (включая Strong) по выбранным криптопарам на таймфреймах от **1 минуты до 1 месяца**, на основе технического анализа **TradingView** (рейтинг `Recommend.All` + 17 индикаторов: RSI, MACD, EMA/SMA, ADX, Ichimoku и др.), с **силой сигнала в %** по каждой паре. Без API-ключей и регистрации.
+
+- **[⬇ Скачать TeronSignals-v1.1.0.apk](https://raw.githubusercontent.com/Aleksandr-pro/Teron/main/releases/TeronSignals-v1.1.0.apk)**
+- **Пакет:** `app.teron.signals` · **Версия:** `1.1.0` (`versionCode = 2`) · Android 7.0+
+- **Обновления:** приложение само проверяет новые версии (кнопка ⬇ в шапке и автопроверка при запуске, файл `releases/TeronSignals-version.json`) и предлагает скачать APK. Все версии подписаны **одним постоянным ключом** (сертификат `SHA-256: 58cdf12e…`), поэтому обновление ставится поверх без потери списка пар.
+- Подробнее: [signals/README.md](signals/README.md)
+
 ## Скачать APK (v2.0.0)
 
 - **[Прямая ссылка для скачивания Teron-v2.0.0.apk](https://raw.githubusercontent.com/Aleksandr-pro/Teron/arena/b1df27d0-teron/releases/Teron-v2.0.0.apk)**

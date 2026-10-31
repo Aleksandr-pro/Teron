@@ -44,6 +44,8 @@ object SignalEngine {
             tvSignal = tvSignal,
             localScore = localScore,
             localSignal = Signal.fromScore(localScore),
+            finalScore = finalScore,
+            confidence = confidence(bull, bear, neu, finalScore),
             finalSignal = Signal.fromScore(finalScore),
             readings = readings,
             bullish = bull,
@@ -51,6 +53,25 @@ object SignalEngine {
             neutral = neu,
             summary = summarize(pair, tvScore, readings, bull, bear)
         )
+    }
+
+    /**
+     * Сила сигнала: доля индикаторов, согласных с итоговым направлением,
+     * усиленная величиной итогового балла. HOLD по определению не бывает
+     * «уверенным» выше среднего.
+     */
+    private fun confidence(bull: Int, bear: Int, neu: Int, finalScore: Double): Int {
+        val known = bull + bear + neu
+        if (known == 0) return 0
+        val agreeing = when {
+            finalScore > 0.02 -> bull
+            finalScore < -0.02 -> bear
+            else -> neu
+        }
+        val agreement = agreeing.toDouble() / known
+        val magnitude = kotlin.math.abs(finalScore).coerceIn(0.0, 1.0)
+        val pct = (agreement * 60 + magnitude * 40).toInt()
+        return pct.coerceIn(0, 100)
     }
 
     private fun evaluate(map: Map<String, Double?>, close: Double): List<IndicatorReading> {

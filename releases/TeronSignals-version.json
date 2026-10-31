@@ -1,0 +1,6 @@
+{
+  "versionCode": 2,
+  "versionName": "1.1.0",
+  "apkUrl": "https://raw.githubusercontent.com/Aleksandr-pro/Teron/main/releases/TeronSignals-v1.1.0.apk",
+  "notes": "Сила сигнала (уверенность) по каждой паре, исправлены подписи таймфреймов (1мин ≠ 1Мес), встроенная проверка обновлений, подпись тем же постоянным ключом."
+}
