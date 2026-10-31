@@ -19,9 +19,15 @@ class Prefs(ctx: Context) {
 
     fun hasWatchlist(): Boolean = sp.contains(KEY_WATCH)
 
+    /** Одноразовая миграция v1.2.0: базовый набор пар (крипта + форекс) добавлен. */
+    var coreSeeded: Boolean
+        get() = sp.getBoolean(KEY_CORE_SEEDED, false)
+        set(value) = sp.edit().putBoolean(KEY_CORE_SEEDED, value).apply()
+
     private companion object {
         const val KEY_TF = "timeframe"
         const val KEY_WATCH = "watchlist"
         const val KEY_MARKET = "market"
+        const val KEY_CORE_SEEDED = "core_seeded_v120"
     }
 }

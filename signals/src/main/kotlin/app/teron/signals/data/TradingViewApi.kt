@@ -1,6 +1,7 @@
 package app.teron.signals.data
 
 import app.teron.signals.core.PairInfo
+import app.teron.signals.core.PairKind
 import app.teron.signals.core.PairSignal
 import app.teron.signals.core.SignalEngine
 import app.teron.signals.core.Timeframe
@@ -19,6 +20,29 @@ object TradingViewApi {
 
     private const val SCANNER = "https://scanner.tradingview.com"
     private val MARKETS = listOf("cex", "crypto")
+    private const val FOREX_MARKET = "forex"
+
+    /** Главные криптовалюты: всегда в сигналах по умолчанию. */
+    val CORE_CRYPTO_TICKERS = listOf("BTCUSDT", "ETHUSDT", "SOLUSDT", "LTCUSDT", "BCHUSDT")
+
+    /**
+     * Топ-5 самых популярных валютных пар Olymp Trade на реальном рынке
+     * (без метки OTC). Котировки и теханализ — форекс-сканнер TradingView
+     * (межбанковский рынок, символы FX:...), а не внебиржевой OTC-фид брокера.
+     */
+    val FOREX_PAIRS: List<PairInfo> = listOf(
+        forexPair("EURUSD", "EUR", "USD", "Евро / доллар США"),
+        forexPair("GBPUSD", "GBP", "USD", "Фунт / доллар США"),
+        forexPair("USDJPY", "USD", "JPY", "Доллар США / иена"),
+        forexPair("AUDUSD", "AUD", "USD", "Австрал. доллар / доллар США"),
+        forexPair("USDCAD", "USD", "CAD", "Доллар США / канад. доллар")
+    )
+
+    private fun forexPair(ticker: String, base: String, quote: String, name: String) = PairInfo(
+        symbol = "FX:$ticker", ticker = ticker, base = base, quote = quote, name = name,
+        price = Double.NaN, change24h = Double.NaN, volume = Double.NaN,
+        marketCap = Double.NaN, rank = Int.MAX_VALUE, kind = PairKind.FOREX
+    )
     private const val UNIVERSITY_SIZE = 220
 
     private val BASE_COLUMNS = listOf(
@@ -110,35 +134,62 @@ object TradingViewApi {
         val columns = BASE_COLUMNS + techColumns(tf)
         Http.background<List<PairSignal>>(
             block = {
-                var best: List<PairSignal>? = null
-                var err = "Сканер не вернул данных"
-                for (market in MARKETS) {
-                    try {
-                        val tickers = JSONArray()
-                        for (p in pairs) tickers.put(p.symbol)
-                        val body = JSONObject().apply {
-                            put("symbols", JSONObject().apply {
-                                put("tickers", tickers)
-                                put("query", JSONObject().apply { put("types", JSONArray()) })
-                            })
-                            put("columns", JSONArray(columns))
+                // Крипта и форекс живут в разных рынках сканнера — запрашиваем
+                // группами и сливаем результат в один список.
+                val out = ArrayList<PairSignal>()
+                var lastErr = "Сканер не вернул данных"
+                val groups: List<Pair<List<String>, List<PairInfo>>> = listOf(
+                    MARKETS to pairs.filter { it.kind == PairKind.CRYPTO },
+                    listOf(FOREX_MARKET) to pairs.filter { it.kind == PairKind.FOREX }
+                )
+                for ((markets, group) in groups) {
+                    if (group.isEmpty()) continue
+                    var got = false
+                    for (market in markets) {
+                        try {
+                            val parsed = scanSignals(market, group, columns, tf)
+                            if (parsed.isNotEmpty()) {
+                                out.addAll(parsed)
+                                got = true
+                                break
+                            }
+                            lastErr = "Сканер $market вернул пустой ответ"
+                        } catch (t: Throwable) {
+                            lastErr = t.message ?: t.javaClass.simpleName
                         }
-                        val raw = Http.postJson("$SCANNER/$market/scan", body.toString())
-                        val parsed = parseSignalRows(raw, columns, pairs, tf)
-                        if (parsed.isNotEmpty()) {
-                            best = parsed
-                            break
-                        }
-                        err = "Сканер $market вернул пустой ответ"
-                    } catch (t: Throwable) {
-                        err = t.message ?: t.javaClass.simpleName
+                    }
+                    if (!got && out.isEmpty()) {
+                        // Группа не ответила, но вторая ещё может — не падаем раньше времени.
+                        continue
                     }
                 }
-                best ?: throw RuntimeException(err)
+                if (out.isEmpty()) throw RuntimeException(lastErr)
+                out.sortedByDescending {
+                    it.tvScore.takeIf { v -> v.isFinite() } ?: Double.NEGATIVE_INFINITY
+                }
             },
             onResult = { r -> if (r != null) onResult(r) else onError("Не удалось получить сигналы") },
             onError = { onError(it.message ?: "Ошибка сети") }
         )
+    }
+
+    private fun scanSignals(
+        market: String,
+        pairs: List<PairInfo>,
+        columns: List<String>,
+        tf: Timeframe
+    ): List<PairSignal> {
+        val tickers = JSONArray()
+        for (p in pairs) tickers.put(p.symbol)
+        val body = JSONObject().apply {
+            put("symbols", JSONObject().apply {
+                put("tickers", tickers)
+                put("query", JSONObject().apply { put("types", JSONArray()) })
+            })
+            put("columns", JSONArray(columns))
+        }
+        val raw = Http.postJson("$SCANNER/$market/scan", body.toString())
+        return parseSignalRows(raw, columns, pairs, tf)
     }
 
     /** Builds a placeholder pair for a ticker the user added that is not in the universe. */

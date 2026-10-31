@@ -53,6 +53,8 @@ data class IndicatorReading(
     val note: String = ""
 )
 
+enum class PairKind { CRYPTO, FOREX }
+
 data class PairInfo(
     val symbol: String,
     val ticker: String,
@@ -63,8 +65,12 @@ data class PairInfo(
     val change24h: Double,
     val volume: Double,
     val marketCap: Double,
-    val rank: Int
-)
+    val rank: Int,
+    val kind: PairKind = PairKind.CRYPTO
+) {
+    /** Человекочитаемая пара: BTC/USDT, EUR/USD. */
+    val display: String get() = if (quote.isEmpty()) base else "$base/$quote"
+}
 
 data class PairSignal(
     val pair: PairInfo,
