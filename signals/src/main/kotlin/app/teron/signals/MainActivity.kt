@@ -37,6 +37,9 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         app = application as SignalsApp
         setContentView(shell())
+        // Show a loading state immediately — never leave a black empty screen
+        // while the pair catalogue is being fetched.
+        setContent(loadingView())
 
         app.boot(
             onReady = {

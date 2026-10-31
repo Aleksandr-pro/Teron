@@ -1,5 +1,7 @@
 package app.teron.signals.data
 
+import android.os.Handler
+import android.os.Looper
 import java.io.BufferedReader
 import java.io.InputStream
 import java.io.InputStreamReader
@@ -14,14 +16,25 @@ object Http {
             "Chrome/120.0.0.0 Mobile Safari/537.36"
 
     private val executor = Executors.newFixedThreadPool(3)
+    private val mainHandler = Handler(Looper.getMainLooper())
 
+    /**
+     * Runs [block] on a background thread, but ALWAYS delivers [onResult] /
+     * [onError] on the Android main (UI) thread. Callbacks touch views, and
+     * touching an attached view off the UI thread throws
+     * CalledFromWrongThreadException — which previously killed the callback
+     * silently inside the thread pool and left a black, empty screen.
+     */
     fun <T> background(block: () -> T, onResult: (T?) -> Unit, onError: (Throwable) -> Unit = {}) {
         executor.execute {
+            val result: T?
             try {
-                onResult(block())
+                result = block()
             } catch (t: Throwable) {
-                onError(t)
+                mainHandler.post { onError(t) }
+                return@execute
             }
+            mainHandler.post { onResult(result) }
         }
     }
 
