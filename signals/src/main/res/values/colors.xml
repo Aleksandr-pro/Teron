@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="signals_bg">#0B0D11</color>
+    <color name="signals_surface">#151922</color>
+    <color name="signals_brand">#2563EB</color>
+</resources>

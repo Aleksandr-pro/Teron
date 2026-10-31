@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="SignalsTheme" parent="@android:style/Theme.DeviceDefault.NoActionBar">
+        <item name="android:windowBackground">@color/signals_bg</item>
+        <item name="android:colorPrimary">@color/signals_brand</item>
+        <item name="android:colorAccent">@color/signals_brand</item>
+        <item name="android:statusBarColor">@color/signals_bg</item>
+        <item name="android:navigationBarColor">@color/signals_bg</item>
+    </style>
+</resources>
