@@ -16,8 +16,10 @@ import app.teron.signals.R
 import app.teron.signals.core.IndicatorReading
 import app.teron.signals.core.IndicatorState
 import app.teron.signals.core.PairInfo
+import app.teron.signals.core.PairKind
 import app.teron.signals.core.PairSignal
 import app.teron.signals.core.Prefs
+import app.teron.signals.core.Signal
 import app.teron.signals.core.Theme
 import app.teron.signals.core.Timeframe
 import app.teron.signals.data.TradingViewApi
@@ -35,9 +37,22 @@ class SignalsScreen(
     private val onChanged: () -> Unit
 ) {
     private lateinit var tfRow: LinearLayout
+    private lateinit var filterRow: LinearLayout
+    private lateinit var summary: TextView
     private lateinit var status: TextView
     private lateinit var listContainer: LinearLayout
     private var loading = false
+    private var filterKind: PairKind? = null
+    private var lastSignals: List<PairSignal> = emptyList()
+
+    // Автообновление раз в минуту, пока экран открыт.
+    private val autoHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val autoTick = object : Runnable {
+        override fun run() {
+            refresh()
+            autoHandler.postDelayed(this, 60_000)
+        }
+    }
 
     fun build(): View {
         val root = Components.vertical(ctx)
@@ -78,12 +93,26 @@ class SignalsScreen(
         scroll.addView(tfRow)
         root.addView(scroll)
 
+        filterRow = Components.horizontal(ctx)
+        filterRow.gravity = Gravity.CENTER_VERTICAL
+        filterRow.setPadding(0, dp(10), 0, 0)
+        renderFilter()
+        root.addView(filterRow)
+
+        summary = Components.text(ctx, "", 12f, Theme.textSecondary, bold = true).apply {
+            setPadding(0, dp(10), 0, 0)
+        }
+        root.addView(summary)
+
         root.addView(
             Components.text(
-                ctx, "Данные: публичный сканнер TradingView · не инвестиционный совет",
+                ctx, "Данные: публичный сканнер TradingView · автообновление 60 сек · не инвестиционный совет",
                 10f, Theme.textMuted
-            ).apply { setPadding(0, dp(8), 0, 0) }
+            ).apply { setPadding(0, dp(6), 0, 0) }
         )
+
+        autoHandler.removeCallbacks(autoTick)
+        autoHandler.postDelayed(autoTick, 60_000)
 
         status = Components.text(ctx, "Загрузка данных…", 12f, Theme.textMuted).apply {
             setPadding(0, dp(6), 0, dp(4))
@@ -116,6 +145,29 @@ class SignalsScreen(
         }
     }
 
+    private fun renderFilter() {
+        filterRow.removeAllViews()
+        val options: List<Pair<String, PairKind?>> = listOf(
+            "Все рынки" to null,
+            "Криптовалюты" to PairKind.CRYPTO,
+            "Валюты (Forex)" to PairKind.FOREX
+        )
+        for ((label, kind) in options) {
+            filterRow.addView(
+                Components.chip(ctx, label, filterKind == kind) {
+                    filterKind = kind
+                    renderFilter()
+                    render(lastSignals)
+                }
+            )
+            filterRow.addView(
+                Components.text(ctx, "", 4f, Theme.textMuted).apply {
+                    layoutParams = LinearLayout.LayoutParams(dp(6), ViewGroup.LayoutParams.WRAP_CONTENT)
+                }
+            )
+        }
+    }
+
     fun refresh() {
         if (!loading) load()
     }
@@ -135,10 +187,12 @@ class SignalsScreen(
             pairs, tf,
             onResult = { signals ->
                 loading = false
+                lastSignals = signals
                 setStatus(
-                    "${signals.size} пар · ${tf.label} · обновлено ${nowTime()}",
+                    "${signals.size} пар · ${tf.label} · обновлено ${nowTime()} · нажмите на пару для деталей",
                     Theme.textSecondary
                 )
+                renderSummary(signals)
                 render(signals)
             },
             onError = { e ->
@@ -162,19 +216,53 @@ class SignalsScreen(
         status.setTextColor(color)
     }
 
-    private fun render(signals: List<PairSignal>) {
-        listContainer.removeAllViews()
+    /** Сводка рынка одной строкой: куда смотрит большинство сигналов. */
+    private fun renderSummary(signals: List<PairSignal>) {
         if (signals.isEmpty()) {
-            renderEmpty("Нет данных", "Нажмите «Обновить» или смените таймфрейм")
+            summary.text = ""
             return
         }
-        signals.forEachIndexed { i, ps ->
-            if (i > 0) {
+        val buy = signals.count { it.finalSignal == Signal.BUY || it.finalSignal == Signal.STRONG_BUY }
+        val sell = signals.count { it.finalSignal == Signal.SELL || it.finalSignal == Signal.STRONG_SELL }
+        val hold = signals.size - buy - sell
+        val strongest = signals.maxByOrNull { it.confidence }
+        summary.text = "Рынок сейчас: ▲ $buy покупать · ▼ $sell продавать · ■ $hold держать" +
+            (strongest?.let { " · Самый сильный: ${it.pair.display} (${it.confidence}%)" } ?: "")
+    }
+
+    private fun render(signals: List<PairSignal>) {
+        listContainer.removeAllViews()
+        val visible = signals.filter { filterKind == null || it.pair.kind == filterKind }
+        if (visible.isEmpty()) {
+            renderEmpty(
+                "Нет данных",
+                if (signals.isEmpty()) "Нажмите «Обновить» или смените таймфрейм"
+                else "В этой категории пока пусто — добавьте пары во вкладке «Пары»"
+            )
+            return
+        }
+        var first = true
+        for ((kind, group) in visible.groupBy { it.pair.kind }) {
+            if (!first) {
                 listContainer.addView(
-                    Components.divider(ctx).apply { setPadding(0, dp(8), 0, dp(8)) }
+                    Components.divider(ctx).apply { setPadding(0, dp(10), 0, dp(2)) }
                 )
             }
-            listContainer.addView(signalCard(ps))
+            first = false
+            listContainer.addView(
+                Components.sectionTitle(
+                    ctx,
+                    if (kind == PairKind.FOREX) "Валютные пары · Forex (без OTC)" else "Криптовалюты"
+                )
+            )
+            group.forEachIndexed { i, ps ->
+                if (i > 0) {
+                    listContainer.addView(
+                        Components.divider(ctx).apply { setPadding(0, dp(8), 0, dp(8)) }
+                    )
+                }
+                listContainer.addView(signalCard(ps))
+            }
         }
     }
 
@@ -212,7 +300,7 @@ class SignalsScreen(
         r1.gravity = Gravity.CENTER_VERTICAL
         r1.addView(Components.coinBadge(ctx, ps.pair.base, 34))
         r1.addView(
-            Components.text(ctx, ps.pair.base, 15f, Theme.textPrimary, bold = true).apply {
+            Components.text(ctx, ps.pair.display, 15f, Theme.textPrimary, bold = true).apply {
                 setPadding(dp(10), 0, 0, 0)
             }
         )
@@ -280,8 +368,26 @@ class SignalsScreen(
         )
         r4.setPadding(0, dp(6), 0, 0)
         card.addView(r4)
+        card.addView(confidenceBar(ps))
 
         return card
+    }
+
+    /** Тонкая полоса уверенности: заполнение = сила сигнала, цвет = направление. */
+    private fun confidenceBar(ps: PairSignal): View {
+        val track = Components.horizontal(ctx)
+        track.setPadding(0, dp(8), 0, 0)
+        val filled = View(ctx).apply {
+            background = Theme.rounded(Theme.signalColor(ps.finalSignal), dp(3).toFloat())
+            layoutParams = LinearLayout.LayoutParams(0, dp(5), ps.confidence.coerceIn(1, 100).toFloat())
+        }
+        val empty = View(ctx).apply {
+            background = Theme.rounded(Theme.cardAlt, dp(3).toFloat())
+            layoutParams = LinearLayout.LayoutParams(0, dp(5), (100 - ps.confidence).coerceIn(0, 99).toFloat())
+        }
+        track.addView(filled)
+        if (ps.confidence < 100) track.addView(empty)
+        return track
     }
 
     private fun arrow(st: IndicatorState?): String = when (st) {
@@ -398,12 +504,28 @@ class PairsScreen(
 
         listContainer.removeAllViews()
         if (watchedRows.isNotEmpty()) {
-            listContainer.addView(Components.sectionTitle(ctx, "Отслеживается (${watchedRows.size})"))
-            watchedRows.forEach { listContainer.addView(pairRow(it, true)) }
+            listContainer.addView(Components.sectionTitle(ctx, "Отслеживается (${watchedRows.size}) · нажмите, чтобы убрать"))
+            watchedRows.groupBy { it.kind }.forEach { (kind, rows) ->
+                listContainer.addView(
+                    Components.sectionTitle(
+                        ctx,
+                        if (kind == PairKind.FOREX) "Валютные пары · Olymp Trade (без OTC)" else "Криптовалюты"
+                    )
+                )
+                rows.forEach { listContainer.addView(pairRow(it, true)) }
+            }
         }
         if (otherRows.isNotEmpty()) {
-            listContainer.addView(Components.sectionTitle(ctx, "Доступные пары (${otherRows.size})"))
-            otherRows.forEach { listContainer.addView(pairRow(it, false)) }
+            listContainer.addView(Components.sectionTitle(ctx, "Доступные пары (${otherRows.size}) · нажмите, чтобы добавить"))
+            otherRows.groupBy { it.kind }.forEach { (kind, rows) ->
+                listContainer.addView(
+                    Components.sectionTitle(
+                        ctx,
+                        if (kind == PairKind.FOREX) "Валютные пары · Olymp Trade (без OTC)" else "Криптовалюты"
+                    )
+                )
+                rows.forEach { listContainer.addView(pairRow(it, false)) }
+            }
         }
         if (pool.isEmpty()) {
             listContainer.addView(Components.emptyState(ctx, "Ничего не найдено", "Измените запрос поиска"))

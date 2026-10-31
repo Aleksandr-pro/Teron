@@ -1,6 +1,6 @@
 {
-  "versionCode": 3,
-  "versionName": "1.1.1",
-  "apkUrl": "https://raw.githubusercontent.com/Aleksandr-pro/Teron/main/releases/TeronSignals-v1.1.1.apk",
-  "notes": "Исправлен чёрный пустой экран при запуске: сетевые ответы теперь обрабатываются в UI-потоке, сразу показывается загрузка, ошибки сети видны с кнопкой повтора. ВНИМАНИЕ: если у вас чёрный экран на v1.1.0 — скачайте этот APK вручную по ссылке, он встанет поверх."
+  "versionCode": 4,
+  "versionName": "1.2.0",
+  "apkUrl": "https://raw.githubusercontent.com/Aleksandr-pro/Teron/main/releases/TeronSignals-v1.2.0.apk",
+  "notes": "Сигналы по главным криптовалютам (BTC, ETH, SOL, LTC, BCH) и топ-5 валютным парам Olymp Trade без OTC (EUR/USD, GBP/USD, USD/JPY, AUD/USD, USD/CAD) через Forex-сканнер TradingView. Удобнее интерфейс: фильтр Крипта/Forex, сводка рынка, полоса силы сигнала, автообновление каждые 60 секунд."
 }
