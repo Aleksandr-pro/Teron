@@ -6,7 +6,7 @@
 
 Нативный помощник трейдера: сигналы **BUY / SELL / HOLD** (включая Strong) по выбранным криптопарам на таймфреймах от **1 минуты до 1 месяца**, на основе технического анализа **TradingView** (рейтинг `Recommend.All` + 17 индикаторов: RSI, MACD, EMA/SMA, ADX, Ichimoku и др.), с **силой сигнала в %** по каждой паре. Без API-ключей и регистрации.
 
-- **[⬇ Скачать TeronSignals-v1.2.1.apk](https://raw.githubusercontent.com/Aleksandr-pro/Teron/main/releases/TeronSignals-v1.2.1.apk)**
+- **[⬇ Скачать TeronSignals-v1.3.0.apk](https://raw.githubusercontent.com/Aleksandr-pro/Teron/main/releases/TeronSignals-v1.3.0.apk)**
 - **Пакет:** `app.teron.signals` · **Версия:** `1.1.0` (`versionCode = 2`) · Android 7.0+
 - **Обновления:** приложение само проверяет новые версии (кнопка ⬇ в шапке и автопроверка при запуске, файл `releases/TeronSignals-version.json`) и предлагает скачать APK. Все версии подписаны **одним постоянным ключом** (сертификат `SHA-256: 58cdf12e…`), поэтому обновление ставится поверх без потери списка пар.
 - Подробнее: [signals/README.md](signals/README.md)

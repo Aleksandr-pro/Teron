@@ -1,6 +1,6 @@
 {
-  "versionCode": 5,
-  "versionName": "1.2.1",
-  "apkUrl": "https://raw.githubusercontent.com/Aleksandr-pro/Teron/main/releases/TeronSignals-v1.2.1.apk",
-  "notes": "Рынки разделены: криптовалюты — каждая монета отдельно (BTC, ETH, SOL, LTC, BCH), валютные пары — парами (EUR/USD, GBP/USD, USD/JPY, AUD/USD, USD/CAD, без OTC). Отдельные секции и отдельная сводка по каждому рынку."
+  "versionCode": 6,
+  "versionName": "1.3.0",
+  "apkUrl": "https://raw.githubusercontent.com/Aleksandr-pro/Teron/main/releases/TeronSignals-v1.3.0.apk",
+  "notes": "Компактный мобильный дизайн: карточки, шрифты и отступы уменьшены под телефон. Чёткая структура: сначала криптовалюты в закреплённом порядке BTC, ETH, SOL, LTC, BCH (Биткоин всегда первый), затем валютные пары EUR/USD, GBP/USD, USD/JPY, AUD/USD, USD/CAD. Если по монете нет данных — она всё равно видна строкой «нет данных», а не пропадает."
 }
