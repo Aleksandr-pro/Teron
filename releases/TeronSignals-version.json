@@ -1,6 +1,6 @@
 {
-  "versionCode": 4,
-  "versionName": "1.2.0",
-  "apkUrl": "https://raw.githubusercontent.com/Aleksandr-pro/Teron/main/releases/TeronSignals-v1.2.0.apk",
-  "notes": "Сигналы по главным криптовалютам (BTC, ETH, SOL, LTC, BCH) и топ-5 валютным парам Olymp Trade без OTC (EUR/USD, GBP/USD, USD/JPY, AUD/USD, USD/CAD) через Forex-сканнер TradingView. Удобнее интерфейс: фильтр Крипта/Forex, сводка рынка, полоса силы сигнала, автообновление каждые 60 секунд."
+  "versionCode": 5,
+  "versionName": "1.2.1",
+  "apkUrl": "https://raw.githubusercontent.com/Aleksandr-pro/Teron/main/releases/TeronSignals-v1.2.1.apk",
+  "notes": "Рынки разделены: криптовалюты — каждая монета отдельно (BTC, ETH, SOL, LTC, BCH), валютные пары — парами (EUR/USD, GBP/USD, USD/JPY, AUD/USD, USD/CAD, без OTC). Отдельные секции и отдельная сводка по каждому рынку."
 }
