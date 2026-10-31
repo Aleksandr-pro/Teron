@@ -13,6 +13,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import app.teron.signals.core.PairSignal
 import app.teron.signals.core.Theme
+import app.teron.signals.data.UpdateChecker
 import app.teron.signals.ui.Components
 import app.teron.signals.ui.DetailScreen
 import app.teron.signals.ui.PairsScreen
@@ -42,6 +43,7 @@ class MainActivity : Activity() {
                 buildScreens()
                 showTab(0)
                 signalsScreen?.refresh()
+                UpdateChecker.checkAuto(this@MainActivity)
             },
             onError = { showFatal(it) }
         )

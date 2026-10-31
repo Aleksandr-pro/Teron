@@ -5,7 +5,13 @@
 технический анализ на выбранном таймфрейме и выдающее сигналы **BUY / SELL / HOLD**
 (с уровнями **STRONG BUY / STRONG SELL**) для пар из вашего списка отслеживания.
 
-Пакет: `app.teron.signals` · minSdk 24 · targetSdk 34.
+Пакет: `app.teron.signals` · minSdk 24 · targetSdk 34 · текущая версия **1.1.0 (versionCode 2)**.
+
+## Скачать и обновлять
+
+- **[⬇ Прямая ссылка: TeronSignals-v1.1.0.apk](https://raw.githubusercontent.com/Aleksandr-pro/Teron/main/releases/TeronSignals-v1.1.0.apk)** — ставится на Android 7.0+, при установке разрешите «установку из неизвестных источников» для браузера.
+- **Обновления внутри приложения:** при запуске и по кнопке ⬇ в шапке экрана «Сигналы» приложение читает `releases/TeronSignals-version.json` из ветки `main`, сравнивает `versionCode` и, если вышла новая версия, предлагает скачать APK. Установка идёт **поверх** текущей версии — watchlist и настройки сохраняются.
+- **Постоянный ключ подписи:** все APK (и Signals, и суперприложение Teron) подписываются одним релизным ключом `keystore/teron-release.keystore` (сертификат `SHA-256: 58cdf12e30609060c789bf2ec9e8836aad99c5451774515ad8851013410d1cd1`). Этот ключ **никогда не менять и не пересоздавать** — иначе Android не даст обновить уже установленные копии. При выпуске новой версии: поднять `versionCode`/`versionName` в `signals/src/main/AndroidManifest.xml`, собрать `bash scripts/build-signals-apk.sh`, обновить `releases/TeronSignals-version.json` — приложение у пользователей само предложит обновление.
 
 ---
 
@@ -59,7 +65,7 @@ POST https://scanner.tradingview.com/{market}/scan
 bash scripts/build-signals-apk.sh
 ```
 
-Готовый подписанный пакет: `releases/TeronSignals-v1.0.0.apk`.
+Готовый подписанный пакет: `releases/TeronSignals-v<versionName>.apk` (имя выводится из манифеста, чтобы не расходиться с проверкой обновлений).
 
 Универсальный сборщик (по умолчанию сохраняет прежнее поведение для Teron):
 

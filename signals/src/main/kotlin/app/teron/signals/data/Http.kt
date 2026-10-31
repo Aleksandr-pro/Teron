@@ -25,6 +25,27 @@ object Http {
         }
     }
 
+    fun getText(url: String, timeoutMs: Int = 15000): String {
+        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 10000
+            readTimeout = timeoutMs
+            useCaches = false
+            instanceFollowRedirects = true
+            setRequestProperty("Accept", "*/*")
+            setRequestProperty("User-Agent", UA)
+        }
+        try {
+            val code = conn.responseCode
+            val stream: InputStream? = if (code in 200..299) conn.inputStream else conn.errorStream
+            val text = stream?.use { BufferedReader(InputStreamReader(it, Charsets.UTF_8)).readText() } ?: ""
+            if (code !in 200..299) throw RuntimeException("HTTP $code")
+            return text
+        } finally {
+            conn.disconnect()
+        }
+    }
+
     fun postJson(
         url: String,
         body: String,

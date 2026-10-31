@@ -21,6 +21,7 @@ import app.teron.signals.core.Prefs
 import app.teron.signals.core.Theme
 import app.teron.signals.core.Timeframe
 import app.teron.signals.data.TradingViewApi
+import app.teron.signals.data.UpdateChecker
 
 // ---------------------------------------------------------------------------
 // Signals
@@ -54,6 +55,11 @@ class SignalsScreen(
             Components.text(ctx, "TradingView TA", 12f, Theme.textMuted, gravity = Gravity.CENTER).apply {
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                 gravity = Gravity.CENTER
+            }
+        )
+        titleRow.addView(
+            Components.iconButton(ctx, R.drawable.ic_update, Theme.textSecondary, 20) {
+                UpdateChecker.checkManual(ctx)
             }
         )
         titleRow.addView(
@@ -269,7 +275,7 @@ class SignalsScreen(
 
         val r4 = Components.text(
             ctx,
-            "TradingView ${Theme.pct(ps.tvScore * 100.0)} · ${ps.summary}",
+            "Сила сигнала ${ps.confidence}% · балл ${Theme.pct(ps.finalScore * 100.0)} · ${ps.summary}",
             11f, Theme.textMuted
         )
         r4.setPadding(0, dp(6), 0, 0)
